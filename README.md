@@ -74,3 +74,76 @@ This project uses **OpenZeppelin’s upgradeable contracts**.
 
 
 
+
+## 👩🏽‍💻 Developer A – Contract Architecture & Core Logic Lead
+
+### 1. 🏗️ Architecture Design
+- Define the **overall architecture** of the DApp, including Factory and Proxy patterns.  
+- Decide between **UUPSUpgradeable** or **TransparentUpgradeableProxy** (OpenZeppelin-based).  
+- Document the **upgrade flow** and `initialize()` function patterns for all modules.
+
+---
+
+### 2. 🏭 EventFactory Contract
+Responsible for deploying and managing event contracts.
+
+**Key Responsibilities:**
+- Deploy new event contracts via the **proxy pattern**.  
+- Map **event owners** to their deployed event addresses.  
+- Emit `EventCreated` events with details (owner, target funding, timestamps, etc.).  
+- Handle **access control** to restrict who can deploy events.  
+- Integrate the `initialize()` call post-deployment for each proxy.
+
+---
+
+### 3. 🎫 EventImplementation Contract (Core Logic)
+Manages the main event and sponsorship lifecycle.
+
+**Features:**
+- Event parameters: `owner`, `fundingGoal`, `currentBalance`, `isFreeEvent`, `isActive`.  
+- `deposit()` function for sponsor contributions.  
+- Automatically blocks deposits once the funding goal is met.  
+- Ticket sale logic with **revenue recording**.  
+- `endEvent()` function triggers **revenue distribution**.  
+- Visibility functions: `getBalance()` and `getSponsors()` for transparency.
+
+---
+
+### 4. 💰 SponsorVault Sub-Module
+Handles internal accounting and revenue distribution.
+
+**Responsibilities:**
+- Mapping of `sponsorAddress → depositAmount`.  
+- Revenue sharing at event completion:
+  - Calculate % share per sponsor.  
+  - Transfer revenue accordingly.  
+- Support for both **paid** and **free** events.  
+- Use **Pull Payment** or automated disbursement pattern for safety.
+
+---
+
+### 5. ⚙️ Proxy Integration
+Ensures upgradeability and maintainability of contracts.
+
+**Tasks:**
+- Implement upgradeable pattern with `initialize()` and version tracking.  
+- Inherit from:
+  - `Initializable`  
+  - `OwnableUpgradeable`  
+  - `UUPSUpgradeable` or similar  
+- Deploy via the upgradeable factory pattern.  
+- Test **upgrading process** for state consistency.
+
+---
+
+### 6. 🧪 Testing & Quality Assurance
+Comprehensive test coverage using Foundry or Hardhat.
+
+**Test Scenarios:**
+- Event creation and initialization flow.  
+- Sponsor deposits and funding goal enforcement.  
+- Event completion and sponsor payouts.  
+- Proxy upgrades (ensuring **storage layout consistency**).  
+
+
+
