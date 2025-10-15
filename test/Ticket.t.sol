@@ -35,7 +35,7 @@ contract EventTicketTest is Test {
         startTime = block.timestamp + startOffset;
         endTime = startTime + duration;
 
-        ticket.createEvent(name, price, maxTickets, startTime, endTime, baseURI);
+    ticket.createEvent(name, price, maxTickets, startTime, endTime, baseURI, EventTicket.EventType.Paid);
         eventId = ticket.nextEventId() - 1;
     }
 
@@ -201,15 +201,15 @@ contract EventTicketTest is Test {
         uint256 nowTs = block.timestamp;
 
         // startTime >= endTime
-        vm.expectRevert(bytes("Invalid time range"));
-        ticket.createEvent("BadRange1", 1 ether, 10, nowTs + 1000, nowTs + 1000, "ipfs://base/");
-        vm.expectRevert(bytes("Invalid time range"));
-        ticket.createEvent("BadRange2", 1 ether, 10, nowTs + 2000, nowTs + 1000, "ipfs://base/");
+    vm.expectRevert(bytes("Invalid time range"));
+    ticket.createEvent("BadRange1", 1 ether, 10, nowTs + 1000, nowTs + 1000, "ipfs://base/", EventTicket.EventType.Paid);
+    vm.expectRevert(bytes("Invalid time range"));
+    ticket.createEvent("BadRange2", 1 ether, 10, nowTs + 2000, nowTs + 1000, "ipfs://base/", EventTicket.EventType.Paid);
 
         // startTime <= current time
-        vm.expectRevert(bytes("Start must be in future"));
-        ticket.createEvent("BadStart", 1 ether, 10, nowTs, nowTs + 1000, "ipfs://base/");
-        vm.expectRevert(bytes("Start must be in future"));
-        ticket.createEvent("BadStart2", 1 ether, 10, nowTs - 1, nowTs + 1000, "ipfs://base/");
+    vm.expectRevert(bytes("Start must be in future"));
+    ticket.createEvent("BadStart", 1 ether, 10, nowTs, nowTs + 1000, "ipfs://base/", EventTicket.EventType.Paid);
+    vm.expectRevert(bytes("Start must be in future"));
+    ticket.createEvent("BadStart2", 1 ether, 10, nowTs - 1, nowTs + 1000, "ipfs://base/", EventTicket.EventType.Paid);
     }
 }

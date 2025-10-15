@@ -119,7 +119,7 @@ contract Payroll is IPayroll, ReentrancyGuard {
                 eventWorkers[event_id][worker.employee].paid = true;
                 eventWorkerList[event_id][i].paid = true;
 
-                bool success = paymentToken.transferFrom(msg.sender, worker.employee, worker.salary);
+                bool success = paymentToken.transferFrom(address(this), worker.employee, worker.salary);
                 if (!success) revert PAYMENT_FAILED();
 
                 emit PayrollPaid(msg.sender, worker.employee, worker.salary, block.timestamp);

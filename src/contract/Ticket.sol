@@ -20,6 +20,8 @@ contract EventTicket is ERC721URIStorage, ReentrancyGuard {
 
     enum Status {Inactive, Active, SoldOut, Ended}
 
+    enum EventType {Free, Paid}
+
     struct Event {
         uint256 id;
         string name;
@@ -31,6 +33,7 @@ contract EventTicket is ERC721URIStorage, ReentrancyGuard {
         uint256 endTime;
         Status status;
         string baseURI; 
+        EventType eventType;
     }
 
     mapping(uint256 => Event) public events;
@@ -42,7 +45,7 @@ contract EventTicket is ERC721URIStorage, ReentrancyGuard {
         paymentToken = IERC20(_paymentToken);
     }
 
-    function createEvent(string memory name,uint256 ticketPrice,uint256 maxTickets,uint256 startTime,uint256 endTime,string memory baseURI) external {
+        function createEvent(string memory name,uint256 ticketPrice,uint256 maxTickets,uint256 startTime,uint256 endTime,string memory baseURI, EventType _eventType) external {
         require(startTime < endTime, "Invalid time range");
         require(startTime > block.timestamp, "Start must be in future");
 
@@ -56,7 +59,8 @@ contract EventTicket is ERC721URIStorage, ReentrancyGuard {
             startTime: startTime,
             endTime: endTime,
             status: Status.Active,
-            baseURI: baseURI
+            baseURI: baseURI,
+            eventType: _eventType
         });
 
         nextEventId++;
@@ -73,9 +77,10 @@ contract EventTicket is ERC721URIStorage, ReentrancyGuard {
             return;
         }
 
-        bool success = paymentToken.transferFrom(msg.sender, address(this), evt.ticketPrice);
-        require(success, "Payment failed");
-        
+        if (evt.eventType == EventType.Paid){
+            bool success = paymentToken.transferFrom(msg.sender, address(this), evt.ticketPrice);
+            require(success, "Payment failed");
+        }
 
 
         uint256 ticketId = nextTicketId;
