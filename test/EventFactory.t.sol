@@ -2,210 +2,148 @@
 pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
-import {EventFactory} from "../src/contract/EventFactory.sol";
-import {EventImplementation} from "../src/contract/EventImplementation.sol";
-import {SponsorVault} from "../src/contract/SponsorVault.sol";
-import {Ticket} from "../src/contract/Ticket.sol";
-import {Payroll} from "../src/contract/Payroll.sol";
-import {ERC20Mock} from "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "../src/contract/EventFactory.sol";
+import "../src/contract/EventImplementation.sol";
+import "../src/contract/Ticket.sol";
+import "../src/contract/Payroll.sol";
+import "../src/contract/SponsorVault.sol";
+
+contract MockERC20 is ERC20 {
+    constructor() ERC20("Test Token", "TEST") {
+        _mint(msg.sender, 1000000 * 10**18);
+    }
+}
 
 contract EventFactoryTest is Test {
-    EventFactory factory;
-    EventImplementation implementation;
-    SponsorVault sponsorVault;
-    Ticket ticket;
-    Payroll payroll;
-    ERC20Mock paymentToken;
+    EventFactory public factory;
+    EventImplementation public implementation;
+    EventTicket public ticketContract;
+    Payroll public payrollContract;
+    SponsorVault public sponsorVault;
+    MockERC20 public paymentToken;
 
-    address owner;
-    address deployer;
-    address alice;
+    address public owner = address(1);
+    address public user1 = address(2);
+    address public user2 = address(3);
+    address public admin = address(4);
+
+    uint256 public constant ADMIN_FEE = 5; // 5%
 
     function setUp() public {
-        owner = makeAddr("owner");
-        deployer = makeAddr("deployer");
-        alice = makeAddr("alice");
+        vm.startPrank(owner);
 
-        paymentToken = new ERC20Mock();
-        ticket = new Ticket();
-        payroll = new Payroll(address(paymentToken));
-        sponsorVault = new SponsorVault(address(paymentToken));
+        // Deploy token and contracts
+        paymentToken = new MockERC20();
         implementation = new EventImplementation();
+        ticketContract = new EventTicket();
+        payrollContract = new Payroll();
+        sponsorVault = new SponsorVault();
 
-        vm.prank(owner);
-        factory = new EventFactory(address(implementation), address(sponsorVault));
-
-        vm.prank(owner);
-        factory.authorizeDeployer(deployer);
-    }
-
-    function testFactoryDeployment() public {
-        assertEq(factory.implementation(), address(implementation));
-        assertEq(factory.sponsorVault(), address(sponsorVault));
-        assertEq(factory.owner(), owner);
-    }
-
-    function testCreateEvent() public {
-        vm.prank(deployer);
-
-        uint256 fundingGoal = 100 ether;
-        uint256 startTime = block.timestamp + 1 days;
-        uint256 endTime = startTime + 7 days;
-        string memory eventName = "Test Event";
-        string memory description = "A test event";
-
-        // Define ticket tiers
-        EventImplementation.TicketTier[] memory tiers = new EventImplementation.TicketTier[](2);
-        tiers[0] = EventImplementation.TicketTier("VIP", 2 ether, 20, 0);
-        tiers[1] = EventImplementation.TicketTier("Standard", 1 ether, 100, 0);
-
-        address eventAddress = factory.createEvent(
-            fundingGoal,
-            startTime,
-            endTime,
-            eventName,
-            description,
-            address(ticket),
-            address(payroll),
+        // Deploy factory
+        factory = new EventFactory(
+            address(implementation),
+            address(ticketContract),
+            address(payrollContract),
+            address(sponsorVault),
             address(paymentToken),
-            tiers
-        );
-
-        assertTrue(eventAddress != address(0));
-        assertEq(factory.getOwnerEventCount(deployer), 1);
-        assertEq(factory.getOwnerEvents(deployer)[0], eventAddress);
-
-        // Verify ticket tiers were set correctly
-        EventImplementation eventContract = EventImplementation(eventAddress);
-        (string memory name0, uint256 price0, uint256 maxSupply0, uint256 sold0) = eventContract.ticketTiers(0);
-        assertEq(name0, "VIP");
-        assertEq(price0, 2 ether);
-        assertEq(maxSupply0, 20);
-    }
-
-    function testCreateFreeEvent() public {
-        vm.prank(deployer);
-
-        uint256 fundingGoal = 0;
-        uint256 startTime = block.timestamp + 1 days;
-        uint256 endTime = startTime + 7 days;
-        string memory eventName = "Free Event";
-        string memory description = "A free event";
-
-        // Define free ticket tiers
-        EventImplementation.TicketTier[] memory tiers = new EventImplementation.TicketTier[](1);
-        tiers[0] = EventImplementation.TicketTier("Free", 0, 1000, 0);
-
-        address eventAddress = factory.createEvent(
-            fundingGoal,
-            startTime,
-            endTime,
-            eventName,
-            description,
-            address(ticket),
-            address(payroll),
-            address(paymentToken),
-            tiers
-        );
-
-        assertTrue(eventAddress != address(0));
-        assertEq(factory.getOwnerEventCount(deployer), 1);
-    }
-
-    function testUnauthorizedDeployerCannotCreateEvent() public {
-        vm.prank(alice);
-
-        uint256 fundingGoal = 100 ether;
-        uint256 startTime = block.timestamp + 1 days;
-        uint256 endTime = startTime + 7 days;
-        string memory eventName = "Test Event";
-        string memory description = "A test event";
-
-        // Define ticket tiers for unauthorized test
-        EventImplementation.TicketTier[] memory tiers = new EventImplementation.TicketTier[](1);
-        tiers[0] = EventImplementation.TicketTier("Standard", 1 ether, 100, 0);
-
-        vm.expectRevert("Not authorized to deploy");
-        factory.createEvent(
-            fundingGoal,
-            startTime,
-            endTime,
-            eventName,
-            description,
-            address(ticket),
-            address(payroll),
-            address(paymentToken),
-            tiers
-        );
-    }
-
-    function testInvalidTimeRange() public {
-        vm.prank(deployer);
-
-        uint256 fundingGoal = 100 ether;
-        uint256 startTime = block.timestamp + 7 days;
-        uint256 endTime = startTime - 1 days; // Invalid: end before start
-        string memory eventName = "Test Event";
-        string memory description = "A test event";
-
-        // Define ticket tiers for invalid time test
-        EventImplementation.TicketTier[] memory tiers = new EventImplementation.TicketTier[](1);
-        tiers[0] = EventImplementation.TicketTier("Standard", 1 ether, 100, 0);
-
-        vm.expectRevert("Invalid time range");
-        factory.createEvent(
-            fundingGoal,
-            startTime,
-            endTime,
-            eventName,
-            description,
-            address(ticket),
-            address(payroll),
-            address(paymentToken),
-            tiers
-        );
-    }
-
-    function testEventIdIncrement() public {
-        vm.startPrank(deployer);
-
-        // Define ticket tiers for first event
-        EventImplementation.TicketTier[] memory tiers1 = new EventImplementation.TicketTier[](1);
-        tiers1[0] = EventImplementation.TicketTier("VIP", 2 ether, 50, 0);
-
-        // First event
-        address event1 = factory.createEvent(
-            100 ether,
-            block.timestamp + 1 days,
-            block.timestamp + 8 days,
-            "Event 1",
-            "Description 1",
-            address(ticket),
-            address(payroll),
-            address(paymentToken),
-            tiers1
-        );
-
-        // Define ticket tiers for second event
-        EventImplementation.TicketTier[] memory tiers2 = new EventImplementation.TicketTier[](1);
-        tiers2[0] = EventImplementation.TicketTier("Standard", 1 ether, 100, 0);
-
-        // Second event
-        address event2 = factory.createEvent(
-            200 ether,
-            block.timestamp + 2 days,
-            block.timestamp + 9 days,
-            "Event 2",
-            "Description 2",
-            address(ticket),
-            address(payroll),
-            address(paymentToken),
-            tiers2
+            ADMIN_FEE,
+            admin
         );
 
         vm.stopPrank();
+    }
 
-        assertTrue(event1 != event2);
-        assertEq(factory.getOwnerEventCount(deployer), 2);
+    function testCreateProxy() public {
+        vm.startPrank(user1);
+        
+        address proxyAddress = factory.createProxy("Test Organization");
+        
+        assertNotEq(proxyAddress, address(0));
+        assertEq(factory.getOwnerProxy(user1), proxyAddress);
+        
+        vm.stopPrank();
+    }
+
+    function testCannotCreateMultipleProxies() public {
+        vm.startPrank(user1);
+        
+        factory.createProxy("First Organization");
+        
+        vm.expectRevert(USER_ALREADY_REGISTERED.selector);
+        factory.createProxy("Second Organization");
+        
+        vm.stopPrank();
+    }
+
+    function testMultipleUsersCanCreateProxies() public {
+        vm.startPrank(user1);
+        address proxy1 = factory.createProxy("Organization 1");
+        vm.stopPrank();
+
+        vm.startPrank(user2);
+        address proxy2 = factory.createProxy("Organization 2");
+        vm.stopPrank();
+
+        assertNotEq(proxy1, proxy2);
+        assertEq(factory.getOwnerProxy(user1), proxy1);
+        assertEq(factory.getOwnerProxy(user2), proxy2);
+    }
+
+    function testGetOwnerProxyRevertsForNonExistentUser() public {
+        vm.expectRevert(USER_NOT_REGISTERD.selector);
+        factory.getOwnerProxy(address(999));
+    }
+
+    function testGetOwnerProxyRevertsForZeroAddress() public {
+        vm.expectRevert(INVALID_ADDRESS.selector);
+        factory.getOwnerProxy(address(0));
+    }
+
+    function testOnlyOwnerCanSetImplementation() public {
+        address newImpl = address(new EventImplementation());
+        
+        vm.startPrank(user1);
+        vm.expectRevert();
+        factory.setImplementation(newImpl);
+        vm.stopPrank();
+
+        vm.startPrank(owner);
+        factory.setImplementation(newImpl);
+        assertEq(factory.implementation(), newImpl);
+        vm.stopPrank();
+    }
+
+    function testOnlyOwnerCanAuthorizeDeployer() public {
+        vm.startPrank(user1);
+        vm.expectRevert();
+        factory.authorizeDeployer(user2);
+        vm.stopPrank();
+
+        vm.startPrank(owner);
+        factory.authorizeDeployer(user2);
+        assertTrue(factory.authorizedDeployers(user2));
+        vm.stopPrank();
+    }
+
+    function testOnlyOwnerCanRevokeDeployer() public {
+        vm.startPrank(owner);
+        factory.authorizeDeployer(user2);
+        assertTrue(factory.authorizedDeployers(user2));
+        
+        factory.revokeDeployer(user2);
+        assertFalse(factory.authorizedDeployers(user2));
+        vm.stopPrank();
+    }
+
+    function testFactoryInitialization() public {
+        assertEq(factory.implementation(), address(implementation));
+        assertEq(factory.ticketContract(), address(ticketContract));
+        assertEq(factory.payrollContract(), address(payrollContract));
+        assertEq(factory.sponsorVault(), address(sponsorVault));
+        assertEq(factory.paymentToken(), address(paymentToken));
+        assertEq(factory.adminFee(), ADMIN_FEE);
+        assertEq(factory.adminFeeAddress(), admin);
+        assertEq(factory.owner(), owner);
     }
 }

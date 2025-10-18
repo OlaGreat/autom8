@@ -4,25 +4,45 @@ pragma solidity ^0.8.20;
 import "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import "./SponsorVault.sol";
 import "./EventImplementation.sol";
+import  "./interface/ITicket.sol";
+import  "./interface/IPayroll.sol";
+import  "./interface/ISponsor.sol";
+import  "./EventProxy.sol";
+
+error USER_ALREADY_REGISTERED();
+error USER_NOT_REGISTERD();
+error INVALID_ADDRESS();
 
 contract EventFactory is Ownable, ReentrancyGuard {
     address public implementation;
+    address public ticketContract;
+    address public payrollContract;
     address public sponsorVault;
-    uint256 public eventIdCounter;
-
-    mapping(address => address[]) public ownerEvents;
+    address public paymentToken;
+    uint public adminFee;
+    address public adminFeeAddress;
+    address public dev;
+    
+    mapping(address => address) public proxies;
     mapping(address => bool) public authorizedDeployers;
+    address[] public proxiesList;
 
-    event EventCreated(address indexed owner, address indexed eventAddress, uint256 eventId, uint256 fundingGoal, uint256 startTime, uint256 endTime);
+    event ProxyCreated(address indexed proxyAddress, address indexed owner, address indexed implementationAddress);
     event ImplementationUpdated(address indexed oldImpl, address indexed newImpl);
     event DeployerAuthorized(address indexed deployer);
     event DeployerRevoked(address indexed deployer);
 
-    constructor(address _implementation, address _sponsorVault) Ownable(msg.sender) {
+    constructor(address _implementation, address _ticketContract, address _payrollContract, 
+    address _sponsorVault, address _paymentToken, uint _adminFee, address _adminFeeAddress) Ownable(msg.sender) {
         implementation = _implementation;
+        ticketContract = _ticketContract;
+        payrollContract = _payrollContract;
         sponsorVault = _sponsorVault;
+        paymentToken = _paymentToken;
+        adminFee = _adminFee;
+        adminFeeAddress = _adminFeeAddress;
+        dev = msg.sender;
     }
 
     modifier onlyAuthorized() {
@@ -46,45 +66,30 @@ contract EventFactory is Ownable, ReentrancyGuard {
         emit DeployerRevoked(deployer);
     }
 
-    function createEvent(
-        uint256 fundingGoal,
-        uint256 startTime,
-        uint256 endTime,
-        string memory eventName,
-        string memory description,
-        address ticketContract,
-        address payrollContract,
-        address paymentToken,
-        EventImplementation.TicketTier[] memory ticketTiers
-    ) external onlyAuthorized nonReentrant returns (address) {
-        require(startTime < endTime, "Invalid time range");
+   
 
-        uint256 eventId = eventIdCounter;
-        eventIdCounter++;
-
+    function createProxy(string memory orgName) external returns (address) {
+        if (proxies[msg.sender] != address(0)) revert USER_ALREADY_REGISTERED();
         bytes memory initData = abi.encodeWithSelector(
             EventImplementation.initialize.selector,
-            msg.sender, eventId, fundingGoal, startTime, endTime, eventName, description, ticketContract, payrollContract, paymentToken, sponsorVault, 7000, 500, owner(), ticketTiers
+            msg.sender, orgName, ticketContract, payrollContract, sponsorVault, paymentToken, adminFee, adminFeeAddress, dev
         );
 
-        ERC1967Proxy proxy = new ERC1967Proxy(implementation, initData);
-        address eventAddress = address(proxy);
+        // ERC1967Proxy proxy = new ERC1967Proxy(implementation, initData);
+        VerifiableProxy proxy = new VerifiableProxy(implementation, msg.sender, initData);
+        address proxyAddress = address(proxy);
 
-        ownerEvents[msg.sender].push(eventAddress);
+        proxies[msg.sender] = proxyAddress;
+        proxiesList.push(proxyAddress);
 
-        // Set the event contract in SponsorVault for access control
-        SponsorVault(sponsorVault).setEventContract(eventId, eventAddress);
-
-        emit EventCreated(msg.sender, eventAddress, eventId, fundingGoal, startTime, endTime);
-
-        return eventAddress;
+        emit ProxyCreated(proxyAddress, msg.sender, implementation);
+        return proxyAddress;
     }
 
-    function getOwnerEvents(address owner) external view returns (address[] memory) {
-        return ownerEvents[owner];
+    function getOwnerProxy(address owner) external view returns (address) {
+        if (owner == address(0)) revert INVALID_ADDRESS();
+        if (proxies[owner] == address(0)) revert USER_NOT_REGISTERD();
+        return proxies[owner];
     }
 
-    function getOwnerEventCount(address owner) external view returns (uint256) {
-        return ownerEvents[owner].length;
-    }
 }

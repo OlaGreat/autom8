@@ -1,67 +1,99 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {ITicket} from "./interface/ITicket.sol";
+import {LibStorage} from "./libraries/LibStorage.sol";
 
-contract Ticket is ERC721, Ownable {
-    uint256 private _tokenIdCounter;
+error EVENT_ENDED();
+error TICKET_SOLD_OUT();
+error INVALID_TOKEN_ID();
+error NOT_OWNER_OR_APPROVED();
 
-    struct TicketInfo {
-        uint256 eventId;
-        uint256 price;
-        uint256 tierId;
-        bool refunded;
+contract EventTicket is ITicket {
+
+    event Transfer(address indexed from, address indexed to, uint256 indexed tokenId);
+    event Approval(address indexed owner, address indexed approved, uint256 indexed tokenId);
+    event ApprovalForAll(address indexed owner, address indexed operator, bool approved);
+
+
+    function buyTicket(uint256 eventId) external {
+        LibStorage.AppStorage storage libStorage = LibStorage.appStorage();
+        
+        LibStorage.EventStruct storage evt = libStorage.events[eventId];
+        require(eventId < libStorage.nextEventId, "Event does not exist");
+        require(block.timestamp <= evt.endTime, "Event has ended");
+        require(evt.ticketsSold < evt.maxTickets, "Tickets sold out");
+        require(evt.status == LibStorage.Status.Active, "Event not active");
+
+        if (evt.eventType == LibStorage.EventType.Paid){
+            IERC20 token = IERC20(libStorage.paymentToken);
+            require(token.transferFrom(msg.sender, address(this), evt.ticketPrice), "Payment failed");
+        }
+
+        uint256 ticketId = libStorage.nextTicketId;
+
+        _mint(msg.sender, ticketId);
+        _setTokenURI(ticketId, evt.ticketUri);
+        
+        emit TicketPurchased(msg.sender, eventId, ticketId, evt.ticketPrice);
+
+        libStorage.ticketToEvent[ticketId] = eventId;
+        evt.ticketsSold++;
+        evt.totalRevenue += evt.ticketPrice;
+        libStorage.nextTicketId++;
+        libStorage.eventBalances[eventId] += evt.ticketPrice;
+
+        if (evt.ticketsSold == evt.maxTickets){
+            evt.status = LibStorage.Status.SoldOut;
+            emit EventSoldOut(eventId);
+        }
     }
 
-    mapping(uint256 => TicketInfo) public ticketInfo;
+    function _mint(address to, uint256 tokenId) internal {
+        LibStorage.AppStorage storage s = LibStorage.appStorage();
+        require(to != address(0), "ERC721: mint to the zero address");
+        require(s.owners[tokenId] == address(0), "ERC721: token already minted");
 
-    event TicketMinted(address indexed to, uint256 indexed tokenId, uint256 eventId, uint256 price);
+        s.balances[to] += 1;
+        s.owners[tokenId] = to;
 
-    constructor() ERC721("Event Ticket", "ETK") Ownable(msg.sender) {}
-
-    function mint(address to) external onlyOwner returns (uint256) {
-        uint256 tokenId = _tokenIdCounter;
-        _tokenIdCounter++;
-        _mint(to, tokenId);
-
-        // Note: eventId and price should be passed or set separately
-        // For now, defaulting to 0 - this should be updated when called from EventImplementation
-        ticketInfo[tokenId] = TicketInfo(0, 0, 0, false);
-
-        emit TicketMinted(to, tokenId, 0, 0);
-        return tokenId;
+        emit Transfer(address(0), to, tokenId);
     }
 
-    function markTicketUsed(uint256 tokenId) external onlyOwner {
-        require(_ownerOf(tokenId) != address(0), "Ticket does not exist");
-        require(!ticketInfo[tokenId].refunded, "Ticket already refunded");
-
-        // Add a used flag to the struct if needed, but for now, we can track usage externally
-        // This function can be used to mark tickets as used at event entry
+    function _setTokenURI(uint256 tokenId, string memory uri) internal {
+        LibStorage.AppStorage storage s = LibStorage.appStorage();
+        require(s.owners[tokenId] != address(0), "ERC721: URI set of nonexistent token");
+        s.tokenURIs[tokenId] = uri;
     }
 
-    function mintWithDetails(address to, uint256 eventId, uint256 price, uint256 tierId) external onlyOwner returns (uint256) {
-        uint256 tokenId = _tokenIdCounter;
-        _tokenIdCounter++;
-        _mint(to, tokenId);
-
-        ticketInfo[tokenId] = TicketInfo(eventId, price, tierId, false);
-
-        emit TicketMinted(to, tokenId, eventId, price);
-        return tokenId;
+    function ownerOf(uint256 tokenId) external view returns (address) {
+        LibStorage.AppStorage storage s = LibStorage.appStorage();
+        address owner = s.owners[tokenId];
+        require(owner != address(0), "ERC721: owner query for nonexistent token");
+        return owner;
     }
 
-    function refundTicket(uint256 tokenId) external onlyOwner {
-        require(_ownerOf(tokenId) != address(0), "Ticket does not exist");
-        require(!ticketInfo[tokenId].refunded, "Ticket already refunded");
-
-        ticketInfo[tokenId].refunded = true;
-        _burn(tokenId);
+    function getTicketOwner() external view returns (address) {
+        LibStorage.AppStorage storage libStorage = LibStorage.appStorage();
+        return libStorage.owner;
     }
 
-    function getTicketInfo(uint256 tokenId) external view returns (TicketInfo memory) {
-        require(_ownerOf(tokenId) != address(0), "Ticket does not exist");
-        return ticketInfo[tokenId];
+    function balanceOf(address owner) external view returns (uint256) {
+        LibStorage.AppStorage storage s = LibStorage.appStorage();
+        require(owner != address(0), "ERC721: balance query for the zero address");
+        return s.balances[owner];
+    }
+
+    function tokenURI(uint256 tokenId) external view returns (string memory) {
+        LibStorage.AppStorage storage s = LibStorage.appStorage();
+        require(s.owners[tokenId] != address(0), "ERC721: URI query for nonexistent token");
+        return s.tokenURIs[tokenId];
+    }
+
+    function getTicketEvent(uint256 ticketId) external view returns (uint256) {
+        LibStorage.AppStorage storage s = LibStorage.appStorage();
+        require(s.owners[ticketId] != address(0), "ERC721: query for nonexistent token");
+        return s.ticketToEvent[ticketId];
     }
 }

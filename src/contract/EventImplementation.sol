@@ -2,235 +2,307 @@
 pragma solidity ^0.8.20;
 
 import "@openzeppelin-upgradeable/contracts/proxy/utils/Initializable.sol";
-import "@openzeppelin-upgradeable/contracts/access/OwnableUpgradeable.sol";
 import "@openzeppelin-upgradeable/contracts/proxy/utils/UUPSUpgradeable.sol";
 import "@openzeppelin-upgradeable/contracts/utils/ReentrancyGuardUpgradeable.sol";
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "./Ticket.sol";
-import "./Payroll.sol";
-import "./SponsorVault.sol";
+import  "./interface/ITicket.sol";
+import  "./interface/IPayroll.sol";
+import  "./interface/ISponsor.sol";
 
-contract EventImplementation is Initializable, OwnableUpgradeable, UUPSUpgradeable, ReentrancyGuardUpgradeable {
-    struct TicketTier {
-        string name;
-        uint256 price;
-        uint256 maxSupply;
-        uint256 currentSold;
-    }
+import {LibStorage} from "./libraries/LibStorage.sol";
 
-    uint256 public eventId;
-    uint256 public fundingGoal;
-    uint256 public currentBalance;
-    uint256 public startTime;
-    uint256 public endTime;
-    string public eventName;
-    string public description;
-    bool public isFreeEvent;
-    bool public isActive;
-    bool public emergencyPaused;
-    uint256 public sponsorPercentage; // Basis points (e.g., 7000 = 70%)
-    uint256 public platformFee; // Basis points (e.g., 500 = 5%)
-    address public platformWallet;
+error INVALID_TIME_RANGE();
+error START_MUST_BE_IN_FUTURE();
+error UNAUTHORIZED_UPGRADE();
 
-    uint256 public constant MIN_DEPOSIT = 0.01 ether;
+contract EventImplementation is Initializable, UUPSUpgradeable, ReentrancyGuardUpgradeable {
+    using LibStorage for LibStorage.AppStorage;
 
-    TicketTier[] public ticketTiers;
+    event EventPaid(uint256 eventId, uint256 timestamp);
 
-    Ticket public ticketContract;
-    Payroll public payrollContract;
-    SponsorVault public sponsorVault;
-    IERC20 public paymentToken;
 
-    event Deposit(address indexed sponsor, uint256 amount);
-    event EventEnded(uint256 totalRevenue, uint256 sponsorShare, uint256 workerShare, uint256 platformFee);
-    event TicketPurchased(address indexed buyer, uint256 ticketId, uint256 price);
-    event DepositWithdrawn(address indexed sponsor, uint256 amount);
-    event EventCancelled(uint256 totalRefunded);
-    event EmergencyPaused(address indexed pauser);
-    event EmergencyUnpaused(address indexed unpauser);
-    event EventDetailsUpdated(string newName, string newDescription);
-
-    /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor() {
-        _disableInitializers();
-    }
 
     function initialize(
-        address _owner,
-        uint256 _eventId,
-        uint256 _fundingGoal,
-        uint256 _startTime,
-        uint256 _endTime,
-        string memory _eventName,
-        string memory _description,
+        address _owner, 
+        string memory orgName, 
         address _ticketContract,
         address _payrollContract,
-        address _paymentToken,
         address _sponsorVault,
-        uint256 _sponsorPercentage,
-        uint256 _platformFee,
-        address _platformWallet,
-        TicketTier[] memory _ticketTiers
-    ) public initializer {
-        __Ownable_init(_owner);
+        address _paymentToken,
+        uint adminFee,
+        address _adminFeeAddress,
+        address dev
+        ) external initializer {
+        LibStorage.AppStorage storage libStorage = LibStorage.appStorage();
+        libStorage.owner = _owner;
+        libStorage.organizationName = orgName;
+        libStorage.admins[_owner] = true;
+        libStorage.paymentToken = _paymentToken;
+        libStorage.adminFee = adminFee;
+        libStorage.adminFeeAddress = _adminFeeAddress;
+        libStorage.devAddress = dev;
+
+        libStorage.ticketContract = ITicket(_ticketContract);
+        libStorage.payrollContract = IPayroll(_payrollContract);
+        libStorage.sponsorVault = ISponsor(_sponsorVault);
         __UUPSUpgradeable_init();
         __ReentrancyGuard_init();
-
-        eventId = _eventId;
-        fundingGoal = _fundingGoal;
-        startTime = _startTime;
-        endTime = _endTime;
-        eventName = _eventName;
-        description = _description;
-        isFreeEvent = _fundingGoal == 0;
-        isActive = true;
-        emergencyPaused = false;
-        sponsorPercentage = _sponsorPercentage;
-        platformFee = _platformFee;
-        platformWallet = _platformWallet;
-
-        ticketContract = Ticket(_ticketContract);
-        payrollContract = Payroll(_payrollContract);
-        sponsorVault = SponsorVault(_sponsorVault);
-        paymentToken = IERC20(_paymentToken);
-
-        // Initialize ticket tiers
-        for (uint256 i = 0; i < _ticketTiers.length; i++) {
-            ticketTiers.push(_ticketTiers[i]);
-        }
     }
+    
 
-    modifier whenNotPaused() {
-        require(!emergencyPaused, "Event is emergency paused");
+    modifier onlyOwner() {
+        LibStorage.AppStorage storage libStorage = LibStorage.appStorage();
+        require(msg.sender == libStorage.owner, "Not owner");
         _;
     }
 
-    function deposit(uint256 amount) external nonReentrant whenNotPaused {
-        require(isActive, "Event is not active");
-        require(block.timestamp >= startTime && block.timestamp <= endTime, "Event not in progress");
-        require(currentBalance < fundingGoal, "Funding goal already met");
-        require(amount >= MIN_DEPOSIT, "Deposit amount too small");
-
-        require(paymentToken.transferFrom(msg.sender, address(sponsorVault), amount), "Transfer failed");
-        sponsorVault.deposit(eventId, msg.sender, amount);
-        currentBalance += amount;
-
-        emit Deposit(msg.sender, amount);
+    modifier onlyImplementationOwner() {
+        LibStorage.AppStorage storage libStorage = LibStorage.appStorage();
+        require(msg.sender == libStorage.devAddress, "Not implementation owner");
+        _;
     }
 
-    function purchaseTicket(uint256 tierId) external nonReentrant whenNotPaused {
-        require(isActive, "Event is not active");
-        require(block.timestamp >= startTime && block.timestamp <= endTime, "Event not in progress");
-        require(tierId < ticketTiers.length, "Invalid ticket tier");
+    // modifier modulesSet() {
+    //     LibStorage.AppStorage storage s = LibStorage.appStorage();
+    //     require(
+    //         s.ticketModule != address(0) &&
+    //         s.sponsorVault != address(0) &&
+    //         s.payrollModule != address(0),
+    //         "Modules not set"
+    //     );
+    //     _;
+    // }
 
-        TicketTier storage tier = ticketTiers[tierId];
-        require(tier.currentSold < tier.maxSupply, "Ticket tier sold out");
 
-        require(paymentToken.transferFrom(msg.sender, address(this), tier.price), "Transfer failed");
-
-        // Mint ticket with correct eventId and tierId
-        uint256 ticketId = ticketContract.mintWithDetails(msg.sender, eventId, tier.price, tierId);
-
-        tier.currentSold++;
-        currentBalance += tier.price;
-
-        emit TicketPurchased(msg.sender, ticketId, tier.price);
-    }
-
-    function endEvent() external onlyOwner nonReentrant {
-        require(isActive, "Event already ended");
-        require(block.timestamp > endTime, "Event not yet ended");
-
-        isActive = false;
-
-        uint256 totalRevenue = currentBalance;
-        uint256 platformFeeAmount = (totalRevenue * platformFee) / 10000;
-        uint256 remainingRevenue = totalRevenue - platformFeeAmount;
-        uint256 sponsorShare = (remainingRevenue * sponsorPercentage) / 10000;
-        uint256 workerShare = remainingRevenue - sponsorShare;
-
-        // Transfer platform fee
-        if (platformFeeAmount > 0) {
-            paymentToken.transfer(platformWallet, platformFeeAmount);
+    function _delegateModuleCall(address module, bytes memory data) internal returns (bytes memory) {
+        (bool success, bytes memory result) = module.delegatecall(data);
+        if (!success) {
+            if (result.length > 0) {
+                assembly {
+                    let size := mload(result)
+                    revert(add(result, 32), size)
+                }
+            } else {
+                revert("Delegatecall failed");
+            }
         }
-
-        // Distribute to sponsors via SponsorVault
-        if (sponsorShare > 0) {
-            paymentToken.transfer(address(sponsorVault), sponsorShare);
-            sponsorVault.distributeRevenue(eventId, sponsorShare);
-        }
-
-        // Pay workers via Payroll
-        if (workerShare > 0) {
-            paymentToken.approve(address(payrollContract), workerShare);
-            payrollContract.payWorkers(eventId);
-        }
-
-        emit EventEnded(totalRevenue, sponsorShare, workerShare, platformFeeAmount);
+        return result;
     }
 
-    function getBalance() external view returns (uint256) {
-        return currentBalance;
+    function createEvent(
+        string memory name,
+        uint256 ticketPrice,
+        uint256 maxTickets,
+        uint256 startTime,
+        uint256 endTime,
+        string memory _ticketUri,
+        LibStorage.EventType _eventType,
+        uint _amountNeededForExpenses
+    ) external onlyOwner nonReentrant {
+        LibStorage.AppStorage storage libStorage = LibStorage.appStorage();
+
+        if (startTime >= endTime) revert INVALID_TIME_RANGE();
+        if (startTime <= block.timestamp) revert START_MUST_BE_IN_FUTURE();
+
+        uint256 id = libStorage.nextEventId;
+        libStorage.events[id] = LibStorage.EventStruct({
+            id: id,
+            name: name,
+            ticketPrice: ticketPrice,
+            maxTickets: maxTickets,
+            ticketsSold: 0,
+            totalRevenue: 0,
+            startTime: startTime,
+            endTime: endTime,
+            status: LibStorage.Status.Active,
+            ticketUri: _ticketUri,
+            eventType: _eventType,
+            creator: msg.sender,
+            amountNeededForExpenses: _amountNeededForExpenses,
+            isPaid: false
+        });
+
+        libStorage.allEvent.push(libStorage.events[id]);
+        libStorage.unpaidEvents.push(libStorage.events[id]);
+
+        libStorage.nextEventId++;
     }
 
-    function getSponsors() external view returns (address[] memory, uint256[] memory) {
-        address[] memory sponsors = sponsorVault.getEventSponsors(eventId);
-        uint256[] memory deposits = new uint256[](sponsors.length);
-        for (uint256 i = 0; i < sponsors.length; i++) {
-            deposits[i] = sponsorVault.getSponsorInfo(eventId, sponsors[i]).depositAmount;
-        }
-        return (sponsors, deposits);
+
+    function buyTicket(uint256 eventId) external nonReentrant {
+        LibStorage.AppStorage storage s = LibStorage.appStorage();
+        _delegateModuleCall(
+            address(s.ticketContract),
+            abi.encodeWithSignature("buyTicket(uint256)", eventId)
+        );
     }
 
-    function withdrawDeposit(uint256 amount) external nonReentrant {
-        require(isActive, "Event ended");
-        require(block.timestamp < startTime, "Event already started");
-        require(amount > 0, "Withdrawal amount must be positive");
 
-        uint256 sponsorDeposit = sponsorVault.getSponsorInfo(eventId, msg.sender).depositAmount;
-        require(sponsorDeposit >= amount, "Insufficient deposit balance");
-
-        // Update sponsor vault
-        sponsorVault.withdrawDeposit(eventId, msg.sender, amount);
-        currentBalance -= amount;
-
-        // Transfer back to sponsor
-        require(paymentToken.transferFrom(address(sponsorVault), msg.sender, amount), "Transfer failed");
-
-        emit DepositWithdrawn(msg.sender, amount);
+    function sponsorEvent(uint256 eventId, uint256 amount) external nonReentrant  {
+        LibStorage.AppStorage storage s = LibStorage.appStorage();
+        _delegateModuleCall(
+            address(s.sponsorVault),
+            abi.encodeWithSignature("sponsorEvent(uint256,uint256)", amount, eventId)
+        );
     }
 
-    function cancelEvent() external onlyOwner nonReentrant {
-        require(isActive, "Event already ended");
-        require(block.timestamp < startTime, "Event already started");
-
-        isActive = false;
-
-        uint256 totalToRefund = currentBalance;
-        if (totalToRefund > 0) {
-            paymentToken.transfer(address(sponsorVault), totalToRefund);
-            sponsorVault.refundAllSponsors(eventId);
-        }
-
-        emit EventCancelled(totalToRefund);
+    function getSponsorInfo(address sponsor, uint256 event_id) external returns (LibStorage.SponsorInfo memory){
+        LibStorage.AppStorage storage s = LibStorage.appStorage();
+        bytes memory result = _delegateModuleCall(
+            address(s.sponsorVault),
+            abi.encodeWithSignature("getSponsorInfo(address,uint256)", sponsor, event_id)
+        );
+        return abi.decode(result, (LibStorage.SponsorInfo));
+    }
+    
+    function getTotalSponsorship(uint256 event_id) external returns (uint256){
+        LibStorage.AppStorage storage s = LibStorage.appStorage();
+        bytes memory result = _delegateModuleCall(
+            address(s.sponsorVault),
+            abi.encodeWithSignature("getTotalSponsorship(uint256)", event_id)
+        );
+        return abi.decode(result, (uint256));
     }
 
-    function emergencyPause() external onlyOwner {
-        emergencyPaused = true;
-        emit EmergencyPaused(msg.sender);
+    function getAllSponsors(uint256 event_id) external returns (LibStorage.SponsorInfo[] memory) {
+        LibStorage.AppStorage storage s = LibStorage.appStorage();
+        bytes memory result = _delegateModuleCall(
+            address(s.sponsorVault),
+            abi.encodeWithSignature("getAllSponsors(uint256)", event_id)
+        );
+        return abi.decode(result, (LibStorage.SponsorInfo[]));
     }
 
-    function emergencyUnpause() external onlyOwner {
-        emergencyPaused = false;
-        emit EmergencyUnpaused(msg.sender);
-    }
-
-    function updateEventDetails(string memory _eventName, string memory _description) external onlyOwner {
-        require(block.timestamp < startTime, "Cannot update after event started");
-        eventName = _eventName;
-        description = _description;
-        emit EventDetailsUpdated(_eventName, _description);
-    }
-
-    function _authorizeUpgrade(address newImplementation) internal override onlyOwner {}
+    function addWorkersToPayroll(LibStorage.WorkerInfo[] memory workersInfo, uint256 eventId) external onlyOwner{
+    LibStorage.AppStorage storage s = LibStorage.appStorage();
+    _delegateModuleCall(
+        address(s.payrollContract),
+        abi.encodeWithSelector(
+            IPayroll.addWorkersToPayroll.selector,
+            workersInfo,
+            eventId
+        )
+    );
 }
+
+    function addWorkerToPayroll(uint256 salary, string memory description, address employeeAddress, uint256 eventId) external onlyOwner{
+        LibStorage.AppStorage storage s = LibStorage.appStorage();
+        _delegateModuleCall(
+            address(s.payrollContract),
+            abi.encodeWithSignature("addWorkerToPayroll(uint256,string,address,uint256)", salary, description, employeeAddress, eventId)
+        );
+
+    }
+    
+    function updateWorkerAddress(address newAddress, address oldAddress, uint256 eventId) external onlyOwner(){
+        LibStorage.AppStorage storage s = LibStorage.appStorage();
+        _delegateModuleCall(
+            address(s.payrollContract),
+            abi.encodeWithSignature("updateWorkerAddress(address,address,uint256)", newAddress, oldAddress, eventId)        
+        );
+    }
+
+    function updateWorkerSalary(address employeeAddress, uint256 newSalary, uint256 eventId) external onlyOwner(){
+        LibStorage.AppStorage storage s = LibStorage.appStorage();
+        _delegateModuleCall(
+            address(s.payrollContract),
+            abi.encodeWithSignature("updateWorkerSalary(address,uint256,uint256)", employeeAddress, newSalary, eventId)        
+        );
+    }
+
+    function getWorkerInfo(address employee, uint256 eventId) external returns (LibStorage.WorkerInfo memory) {
+        LibStorage.AppStorage storage s = LibStorage.appStorage();
+        bytes memory result = _delegateModuleCall(
+            address(s.payrollContract),
+            abi.encodeWithSignature("getWorkerInfo(address,uint256)", employee, eventId)
+        );
+        return abi.decode(result, (LibStorage.WorkerInfo));
+    }
+
+    function getTotalCost(uint256 event_id) external returns (uint256) {
+        LibStorage.AppStorage storage s = LibStorage.appStorage();
+        require(event_id < s.nextEventId, "Event does not exist");
+        bytes memory result = _delegateModuleCall(
+            address(s.payrollContract),
+            abi.encodeWithSignature("getTotalCost(uint256)", event_id)
+        );
+        return abi.decode(result, (uint256));
+
+    }
+
+    function getTicketTotalSale(uint256 eventId) external view returns (uint256) {
+        LibStorage.AppStorage storage libStorage = LibStorage.appStorage();
+        require(eventId < libStorage.nextEventId, "Event does not exist");
+        return libStorage.events[eventId].ticketsSold;
+    }
+
+    function getEventRevenue(uint256 eventId) external view returns (uint256) {
+        LibStorage.AppStorage storage libStorage = LibStorage.appStorage();
+        require(eventId < libStorage.nextEventId, "Event does not exist");
+        return libStorage.events[eventId].totalRevenue;
+    }
+
+    function getEventInfo(uint256 eventId) external view returns (LibStorage.EventStruct memory) {
+        LibStorage.AppStorage storage libStorage = LibStorage.appStorage();
+        require(eventId < libStorage.nextEventId, "Event does not exist");
+        return libStorage.events[eventId];
+    }
+
+    function getAllEvents() external view returns (LibStorage.EventStruct[] memory) {
+        LibStorage.AppStorage storage libStorage = LibStorage.appStorage();
+        LibStorage.EventStruct[] memory allEvents = libStorage.allEvent;
+        return allEvents;
+    }   
+
+    function getEventWorkers(uint256 event_id) external returns (LibStorage.WorkerInfo [] memory) {
+        LibStorage.AppStorage storage s = LibStorage.appStorage();
+        bytes memory result = _delegateModuleCall(
+            address(s.payrollContract),
+            abi.encodeWithSignature("getAllWorker(uint256)",event_id)
+        );
+        return abi.decode(result, (LibStorage.WorkerInfo []));
+    }
+
+    function getOwner() external view returns (address) {
+        LibStorage.AppStorage storage libStorage = LibStorage.appStorage();
+        return libStorage.owner;
+    }
+
+
+    function pay () external {
+        LibStorage.AppStorage storage libStorage = LibStorage.appStorage();
+        LibStorage.EventStruct [] storage unPaidEvents = libStorage.unpaidEvents;
+        LibStorage.EventStruct [] storage events = libStorage.allEvent;
+        if (unPaidEvents.length == 0) {
+            return;
+        }
+
+        for (uint i = 0; i < unPaidEvents.length; i++) {
+            if (!unPaidEvents[i].isPaid && block.timestamp > unPaidEvents[i].endTime) {
+                uint256 eventId = unPaidEvents[i].id;
+                events[eventId].isPaid = true;
+                libStorage.events[eventId].isPaid = true;
+                _delegateModuleCall(
+                    address(libStorage.payrollContract),
+                    abi.encodeWithSignature("payWorkers(uint256)", eventId)
+                );
+
+                _delegateModuleCall(
+                    address(libStorage.sponsorVault),
+                    abi.encodeWithSignature("distributeSponsorshipFunds(uint256)", eventId)
+                );
+
+                unPaidEvents[i] = unPaidEvents[unPaidEvents.length - 1];
+                unPaidEvents.pop();
+                emit EventPaid(eventId, block.timestamp);
+            }
+        }
+    
+    }
+
+
+    function _authorizeUpgrade(address) internal override onlyImplementationOwner {}
+
+
+}
+
+

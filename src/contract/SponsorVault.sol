@@ -1,126 +1,93 @@
-// SPDX-License-Identifier: MIT
+ // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+error INVALID_AMOUNT_TO_DEPOSIT();
+error NO_INCOME_TO_DISTRIBUTE();
+
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-contract SponsorVault is ReentrancyGuard {
-    IERC20 public paymentToken;
+import {ISponsor} from "./interface/ISponsor.sol";
+import {LibStorage} from "./libraries/LibStorage.sol";
 
-    struct SponsorInfo {
-        uint256 depositAmount;
-        uint256 sharePercentage; // Basis points (e.g., 1000 = 10%)
+error EVENT_HAS_ENOUGH_BALANCE();
+
+contract SponsorVault is ISponsor {
+
+    function sponsorEvent(uint256 amount, uint256 event_id) external  {
+        LibStorage.AppStorage storage libStorage = LibStorage.appStorage();
+        require(event_id < libStorage.nextEventId, "Event does not exist");
+        if (amount == 0) revert INVALID_AMOUNT_TO_DEPOSIT();
+        if (libStorage.eventBalances[event_id] >= libStorage.events[event_id].amountNeededForExpenses) revert EVENT_HAS_ENOUGH_BALANCE();
+
+        IERC20 paymentToken = IERC20(libStorage.paymentToken);
+        paymentToken.transferFrom(msg.sender, address(this), amount);
+        
+        uint256 amountNeeded = libStorage.events[event_id].amountNeededForExpenses;
+        uint256 _percentageContributed = (amount * 10000) /amountNeeded; 
+
+        LibStorage.SponsorInfo memory sponsor = LibStorage.SponsorInfo({
+            sponsor: msg.sender,
+            amount: amount,
+            position: libStorage.eventSponsorList[event_id].length,
+            eventId: event_id,
+            percentageContribution: _percentageContributed
+        });
+
+        libStorage.eventSponsors[event_id][msg.sender] = sponsor;
+        libStorage.eventSponsorList[event_id].push(sponsor);
+        libStorage.totalSponsorship[event_id] += amount;
+        libStorage.eventBalances[event_id] += amount;
+        libStorage.expensesBalance[event_id] += amount;
+        emit EventSponsored(msg.sender, amount, event_id);        
     }
 
-    mapping(uint256 => mapping(address => SponsorInfo)) public eventSponsors;
-    mapping(uint256 => address[]) public eventSponsorList;
-    mapping(uint256 => uint256) public eventTotalDeposits;
-    mapping(uint256 => address) public eventContracts;
 
-    event SponsorDeposited(uint256 indexed eventId, address indexed sponsor, uint256 amount);
-    event RevenueDistributed(uint256 indexed eventId, address indexed sponsor, uint256 amount);
-    event DepositWithdrawn(uint256 indexed eventId, address indexed sponsor, uint256 amount);
-    event SponsorsRefunded(uint256 indexed eventId, uint256 totalRefunded);
-
-    constructor(address _paymentToken) {
-        paymentToken = IERC20(_paymentToken);
+    function getSponsorInfo(address sponsor, uint256 event_id) external view returns (LibStorage.SponsorInfo memory){
+        LibStorage.AppStorage storage libStorage = LibStorage.appStorage();
+        require(event_id < libStorage.nextEventId, "Event does not exist");
+        return libStorage.eventSponsors[event_id][sponsor];
+    }
+    function getTotalSponsorship(uint256 event_id) external view returns (uint256){
+        LibStorage.AppStorage storage libStorage = LibStorage.appStorage();
+        require(event_id < libStorage.nextEventId, "Event does not exist");
+        return libStorage.totalSponsorship[event_id];
+    }
+    function getAllSponsors(uint256 event_id) external view returns (LibStorage.SponsorInfo[] memory){
+        LibStorage.AppStorage storage libStorage = LibStorage.appStorage();
+        require(event_id < libStorage.nextEventId, "Event does not exist");
+        require(libStorage.eventSponsorList[event_id].length > 0,"event has no sponsor");
+        return libStorage.eventSponsorList[event_id];
     }
 
-    modifier onlyEventContract(uint256 eventId) {
-        require(msg.sender == eventContracts[eventId], "Unauthorized: not event contract");
-        _;
+    function getSponsorOwner() external view returns (address) {
+        LibStorage.AppStorage storage libStorage = LibStorage.appStorage();
+        return libStorage.owner;
     }
 
-    function setEventContract(uint256 eventId, address eventContract) external {
-        // This should be called by the factory during event creation
-        require(eventContracts[eventId] == address(0), "Event contract already set");
-        eventContracts[eventId] = eventContract;
-    }
 
-    function deposit(uint256 eventId, address sponsor, uint256 amount) external onlyEventContract(eventId) nonReentrant {
-        require(amount > 0, "Deposit must be positive");
+    function distributeSponsorship(uint256 event_id) external{
+        LibStorage.AppStorage storage libStorage = LibStorage.appStorage();
+        require(event_id < libStorage.nextEventId, "Event does not exist");
+        uint256 platformFee = (libStorage.eventBalances[event_id] * libStorage.adminFee) /100;
 
-        // Note: Transfer is handled by EventImplementation, so we don't transfer here
+        IERC20 paymentToken = IERC20(libStorage.paymentToken);
+        (bool success1 ) = paymentToken.transfer(libStorage.adminFeeAddress, platformFee);
+        require(success1, "Payment failed");
 
-        if (eventSponsors[eventId][sponsor].depositAmount == 0) {
-            eventSponsorList[eventId].push(sponsor);
+        uint256 totalIncome = libStorage.eventBalances[event_id] - platformFee;
+        if (totalIncome == 0) revert NO_INCOME_TO_DISTRIBUTE();
+        LibStorage.SponsorInfo [] storage sponsorInfo = libStorage.eventSponsorList[event_id];
+
+        for (uint i = 0; i < sponsorInfo.length; i++){
+            LibStorage.SponsorInfo storage sponsor = sponsorInfo[i];
+            uint256 share = sponsor.percentageContribution;
+
+            uint sponsorShare = (totalIncome * share) / 10000;
+            require(paymentToken.transfer(sponsor.sponsor, sponsorShare), "payment failed");
+            libStorage.eventBalances[event_id] -= sponsorShare;
+            emit SponsorshipDistributed(sponsor.sponsor, sponsorShare, event_id);
         }
 
-        eventSponsors[eventId][sponsor].depositAmount += amount;
-        eventTotalDeposits[eventId] += amount;
 
-        // Update share percentages for all sponsors
-        _updateSharePercentages(eventId);
-
-        emit SponsorDeposited(eventId, sponsor, amount);
-    }
-
-    function distributeRevenue(uint256 eventId, uint256 totalRevenue) external onlyEventContract(eventId) nonReentrant {
-        uint256 totalDeposits = eventTotalDeposits[eventId];
-        require(totalDeposits > 0, "No deposits to distribute");
-
-        address[] memory sponsors = eventSponsorList[eventId];
-        for (uint256 i = 0; i < sponsors.length; i++) {
-            address sponsor = sponsors[i];
-            uint256 share = (eventSponsors[eventId][sponsor].depositAmount * totalRevenue) / totalDeposits;
-            if (share > 0) {
-                paymentToken.transfer(sponsor, share);
-                emit RevenueDistributed(eventId, sponsor, share);
-            }
-        }
-    }
-
-    function withdrawDeposit(uint256 eventId, address sponsor, uint256 amount) external onlyEventContract(eventId) nonReentrant {
-        require(amount > 0, "Withdrawal amount must be positive");
-        require(eventSponsors[eventId][sponsor].depositAmount >= amount, "Insufficient deposit balance");
-
-        eventSponsors[eventId][sponsor].depositAmount -= amount;
-        eventTotalDeposits[eventId] -= amount;
-
-        // Update share percentages for remaining sponsors
-        _updateSharePercentages(eventId);
-
-        emit DepositWithdrawn(eventId, sponsor, amount);
-    }
-
-    function refundAllSponsors(uint256 eventId) external onlyEventContract(eventId) nonReentrant {
-        uint256 totalToRefund = eventTotalDeposits[eventId];
-        require(totalToRefund > 0, "No deposits to refund");
-
-        address[] memory sponsors = eventSponsorList[eventId];
-        for (uint256 i = 0; i < sponsors.length; i++) {
-            address sponsor = sponsors[i];
-            uint256 depositAmount = eventSponsors[eventId][sponsor].depositAmount;
-            if (depositAmount > 0) {
-                paymentToken.transfer(sponsor, depositAmount);
-                eventSponsors[eventId][sponsor].depositAmount = 0;
-            }
-        }
-
-        eventTotalDeposits[eventId] = 0;
-        emit SponsorsRefunded(eventId, totalToRefund);
-    }
-
-    function getSponsorInfo(uint256 eventId, address sponsor) external view returns (SponsorInfo memory) {
-        return eventSponsors[eventId][sponsor];
-    }
-
-    function getEventSponsors(uint256 eventId) external view returns (address[] memory) {
-        return eventSponsorList[eventId];
-    }
-
-    function getTotalDeposits(uint256 eventId) external view returns (uint256) {
-        return eventTotalDeposits[eventId];
-    }
-
-    function _updateSharePercentages(uint256 eventId) internal {
-        uint256 totalDeposits = eventTotalDeposits[eventId];
-        address[] memory sponsors = eventSponsorList[eventId];
-
-        for (uint256 i = 0; i < sponsors.length; i++) {
-            address sponsor = sponsors[i];
-            uint256 sponsorDeposit = eventSponsors[eventId][sponsor].depositAmount;
-            eventSponsors[eventId][sponsor].sharePercentage = (sponsorDeposit * 10000) / totalDeposits; // Basis points
-        }
     }
 }

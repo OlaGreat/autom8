@@ -2,285 +2,294 @@
 pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
-import {EventImplementation} from "../src/contract/EventImplementation.sol";
-import {SponsorVault} from "../src/contract/SponsorVault.sol";
-import {Ticket} from "../src/contract/Ticket.sol";
-import {Payroll} from "../src/contract/Payroll.sol";
-import {ERC20Mock} from "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
-import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "../src/contract/EventFactory.sol";
+import "../src/contract/EventImplementation.sol";
+import "../src/contract/Ticket.sol";
+import "../src/contract/Payroll.sol";
+import "../src/contract/SponsorVault.sol";
+import {LibStorage} from "../src/contract/libraries/LibStorage.sol";
+
+contract MockERC20 is ERC20 {
+    constructor() ERC20("Test Token", "TEST") {
+        _mint(msg.sender, 1000000 * 10**18);
+    }
+
+    function mint(address to, uint256 amount) public {
+        _mint(to, amount);
+    }
+}
 
 contract EventImplementationTest is Test {
-    EventImplementation eventImpl;
-    EventImplementation proxy;
-    SponsorVault sponsorVault;
-    Ticket ticket;
-    Payroll payroll;
-    ERC20Mock paymentToken;
+    EventFactory public factory;
+    EventImplementation public implementation;
+    EventTicket public ticketContract;
+    Payroll public payrollContract;
+    SponsorVault public sponsorVault;
+    MockERC20 public paymentToken;
+    EventImplementation public proxy;
 
-    address owner;
-    address alice;
-    address bob;
+    address public owner = address(1);
+    address public user = address(2);
+    address public admin = address(3);
 
-    uint256 eventId = 1;
-    uint256 fundingGoal = 100 ether;
-    uint256 startTime;
-    uint256 endTime;
+    uint256 public constant ADMIN_FEE = 5; // 5%
+    uint256 public constant TICKET_PRICE = 1 ether;
+    uint256 public constant MAX_TICKETS = 100;
+    uint256 public constant EVENT_EXPENSES = 50 ether;
 
     function setUp() public {
-        owner = makeAddr("owner");
-        alice = makeAddr("alice");
-        bob = makeAddr("bob");
+        vm.startPrank(owner);
 
-        paymentToken = new ERC20Mock();
-        ticket = new Ticket();
-        payroll = new Payroll(address(paymentToken));
-        sponsorVault = new SponsorVault(address(paymentToken));
+        // Deploy token and contracts
+        paymentToken = new MockERC20();
+        implementation = new EventImplementation();
+        ticketContract = new EventTicket();
+        payrollContract = new Payroll();
+        sponsorVault = new SponsorVault();
 
-        startTime = block.timestamp + 1 days;
-        endTime = startTime + 7 days;
-
-        eventImpl = new EventImplementation();
-
-        // Define ticket tiers
-        EventImplementation.TicketTier[] memory tiers = new EventImplementation.TicketTier[](3);
-        tiers[0] = EventImplementation.TicketTier("VIP", 1 ether, 10, 0);
-        tiers[1] = EventImplementation.TicketTier("General", 0.5 ether, 100, 0);
-        tiers[2] = EventImplementation.TicketTier("Early Bird", 0.3 ether, 50, 0);
-
-        bytes memory initData = abi.encodeWithSelector(
-            EventImplementation.initialize.selector,
-            owner,
-            eventId,
-            fundingGoal,
-            startTime,
-            endTime,
-            "Test Event",
-            "A test event",
-            address(ticket),
-            address(payroll),
-            address(paymentToken),
+        // Deploy factory
+        factory = new EventFactory(
+            address(implementation),
+            address(ticketContract),
+            address(payrollContract),
             address(sponsorVault),
-            7000, // sponsorPercentage
-            500,  // platformFee
-            owner, // platformWallet
-            tiers
+            address(paymentToken),
+            ADMIN_FEE,
+            admin
         );
 
-        ERC1967Proxy proxyContract = new ERC1967Proxy(address(eventImpl), initData);
-        proxy = EventImplementation(address(proxyContract));
+        vm.stopPrank();
 
-        // Set the event contract in SponsorVault for access control
-        sponsorVault.setEventContract(eventId, address(proxy));
+        // Create proxy for testing
+        vm.startPrank(user);
+        address proxyAddress = factory.createProxy("Test Organization");
+        proxy = EventImplementation(proxyAddress);
+        vm.stopPrank();
 
-        // Transfer ownership of ticket contract to the proxy
-        ticket.transferOwnership(address(proxy));
+        // Mint tokens
+        paymentToken.mint(user, 100 ether);
     }
 
-    function testInitialization() public {
-        assertEq(proxy.owner(), owner);
-        assertEq(proxy.eventId(), eventId);
-        assertEq(proxy.fundingGoal(), fundingGoal);
-        assertEq(proxy.startTime(), startTime);
-        assertEq(proxy.endTime(), endTime);
-        assertEq(proxy.isActive(), true);
-        assertEq(proxy.isFreeEvent(), false);
-        assertEq(proxy.sponsorPercentage(), 7000);
-        assertEq(proxy.platformFee(), 500);
-        assertEq(proxy.platformWallet(), owner);
+    function testCreateEvent() public {
+        vm.startPrank(user);
+        
+        uint256 startTime = block.timestamp + 1 days;
+        uint256 endTime = block.timestamp + 7 days;
 
-        // Check ticket tiers
-        (string memory name0, uint256 price0, uint256 maxSupply0, uint256 sold0) = proxy.ticketTiers(0);
-        assertEq(name0, "VIP");
-        assertEq(price0, 1 ether);
-        assertEq(maxSupply0, 10);
-        assertEq(sold0, 0);
+        proxy.createEvent(
+            "Test Event",
+            TICKET_PRICE,
+            MAX_TICKETS,
+            startTime,
+            endTime,
+            "https://example.com/ticket",
+            LibStorage.EventType.Paid,
+            EVENT_EXPENSES
+        );
 
-        (string memory name1, uint256 price1, uint256 maxSupply1, uint256 sold1) = proxy.ticketTiers(1);
-        assertEq(name1, "General");
-        assertEq(price1, 0.5 ether);
-        assertEq(maxSupply1, 100);
-        assertEq(sold1, 0);
-    }
-
-    function testDepositBeforeStart() public {
-        vm.prank(alice);
-        vm.expectRevert("Event not in progress");
-        proxy.deposit(10 ether);
-    }
-
-    function testDepositAfterEnd() public {
-        vm.warp(endTime + 1);
-        vm.prank(alice);
-        vm.expectRevert("Event not in progress");
-        proxy.deposit(10 ether);
-    }
-
-    function testDepositAfterFundingGoal() public {
-        vm.warp(startTime + 1);
-        vm.startPrank(alice);
-        paymentToken.mint(alice, 100 ether);
-        paymentToken.approve(address(proxy), 100 ether);
-
-        proxy.deposit(50 ether);
-        proxy.deposit(50 ether); // Should fail as goal met
-
-        vm.expectRevert("Funding goal already met");
-        proxy.deposit(1 ether);
+        LibStorage.EventStruct memory eventInfo = proxy.getEventInfo(0);
+        assertEq(eventInfo.name, "Test Event");
+        assertEq(eventInfo.ticketPrice, TICKET_PRICE);
+        assertEq(eventInfo.maxTickets, MAX_TICKETS);
+        assertEq(eventInfo.startTime, startTime);
+        assertEq(eventInfo.endTime, endTime);
+        assertEq(uint(eventInfo.status), uint(LibStorage.Status.Active));
+        assertEq(uint(eventInfo.eventType), uint(LibStorage.EventType.Paid));
+        assertEq(eventInfo.amountNeededForExpenses, EVENT_EXPENSES);
+        assertEq(eventInfo.creator, user);
+        
         vm.stopPrank();
     }
 
-    function testDepositSuccess() public {
-        vm.warp(startTime + 1);
-        vm.startPrank(alice);
-        paymentToken.mint(alice, 50 ether);
-        paymentToken.approve(address(proxy), 50 ether);
+    function testOnlyOwnerCanCreateEvent() public {
+        vm.startPrank(address(999)); // Non-owner
+        
+        uint256 startTime = block.timestamp + 1 days;
+        uint256 endTime = block.timestamp + 7 days;
 
-        proxy.deposit(50 ether);
-
-        assertEq(proxy.currentBalance(), 50 ether);
+        vm.expectRevert("Not owner");
+        proxy.createEvent(
+            "Unauthorized Event",
+            TICKET_PRICE,
+            MAX_TICKETS,
+            startTime,
+            endTime,
+            "https://example.com/ticket",
+            LibStorage.EventType.Paid,
+            EVENT_EXPENSES
+        );
+        
         vm.stopPrank();
     }
 
-    function testEndEventBeforeEndTime() public {
-        vm.prank(owner);
-        vm.expectRevert("Event not yet ended");
-        proxy.endEvent();
-    }
+    function testCannotCreateEventWithInvalidTimeRange() public {
+        vm.startPrank(user);
+        
+        uint256 startTime = block.timestamp + 7 days;
+        uint256 endTime = block.timestamp + 1 days; // End before start
 
-    function testEndEventAfterEndTime() public {
-        vm.warp(endTime + 1);
-        vm.prank(owner);
-        proxy.endEvent();
-
-        assertEq(proxy.isActive(), false);
-    }
-
-    function testEndEventNotOwner() public {
-        vm.warp(endTime + 1);
-        vm.prank(alice);
-        vm.expectRevert();
-        proxy.endEvent();
-    }
-
-    function testGetBalance() public {
-        assertEq(proxy.getBalance(), 0);
-        vm.warp(startTime + 1);
-        vm.startPrank(alice);
-        paymentToken.mint(alice, 25 ether);
-        paymentToken.approve(address(proxy), 25 ether);
-        proxy.deposit(25 ether);
+        vm.expectRevert(INVALID_TIME_RANGE.selector);
+        proxy.createEvent(
+            "Invalid Event",
+            TICKET_PRICE,
+            MAX_TICKETS,
+            startTime,
+            endTime,
+            "https://example.com/ticket",
+            LibStorage.EventType.Paid,
+            EVENT_EXPENSES
+        );
+        
         vm.stopPrank();
-
-        assertEq(proxy.getBalance(), 25 ether);
     }
 
-    function testGetSponsors() public {
-        vm.warp(startTime + 1);
-        vm.startPrank(alice);
-        paymentToken.mint(alice, 25 ether);
-        paymentToken.approve(address(proxy), 25 ether);
-        proxy.deposit(25 ether);
-        vm.stopPrank();
+    function testCannotCreateEventInPast() public {
+        vm.startPrank(user);
+        
+        uint256 startTime = block.timestamp - 1; // Past time
+        uint256 endTime = block.timestamp + 7 days;
 
-        vm.startPrank(bob);
-        paymentToken.mint(bob, 25 ether);
-        paymentToken.approve(address(proxy), 25 ether);
-        proxy.deposit(25 ether);
+        vm.expectRevert(START_MUST_BE_IN_FUTURE.selector);
+        proxy.createEvent(
+            "Past Event",
+            TICKET_PRICE,
+            MAX_TICKETS,
+            startTime,
+            endTime,
+            "https://example.com/ticket",
+            LibStorage.EventType.Paid,
+            EVENT_EXPENSES
+        );
+        
         vm.stopPrank();
+    }
 
-        (address[] memory sponsors, uint256[] memory deposits) = proxy.getSponsors();
-        assertEq(sponsors.length, 2, "Should have 2 sponsors");
-        assertEq(deposits.length, 2, "Should have 2 deposits");
-        // Check that both deposits are present (order might vary)
-        bool foundAlice = false;
-        bool foundBob = false;
-        for (uint256 i = 0; i < deposits.length; i++) {
-            if (deposits[i] == 25 ether) {
-                if (sponsors[i] == alice) foundAlice = true;
-                if (sponsors[i] == bob) foundBob = true;
-            }
-        }
-        assertTrue(foundAlice, "Alice's deposit should be found");
-        assertTrue(foundBob, "Bob's deposit should be found");
+    function testGetAllEvents() public {
+        vm.startPrank(user);
+        
+        uint256 startTime = block.timestamp + 1 days;
+        uint256 endTime = block.timestamp + 7 days;
+
+        // Create multiple events
+        proxy.createEvent(
+            "Event 1",
+            TICKET_PRICE,
+            MAX_TICKETS,
+            startTime,
+            endTime,
+            "https://example.com/ticket1",
+            LibStorage.EventType.Paid,
+            EVENT_EXPENSES
+        );
+
+        proxy.createEvent(
+            "Event 2",
+            TICKET_PRICE * 2,
+            MAX_TICKETS / 2,
+            startTime + 1 days,
+            endTime + 1 days,
+            "https://example.com/ticket2",
+            LibStorage.EventType.Free,
+            EVENT_EXPENSES * 2
+        );
+
+        LibStorage.EventStruct[] memory allEvents = proxy.getAllEvents();
+        assertEq(allEvents.length, 2);
+        assertEq(allEvents[0].name, "Event 1");
+        assertEq(allEvents[1].name, "Event 2");
+        assertEq(allEvents[1].ticketPrice, TICKET_PRICE * 2);
+        
+        vm.stopPrank();
+    }
+
+    function testGetEventRevenue() public {
+        vm.startPrank(user);
+        
+        uint256 startTime = block.timestamp + 1 days;
+        uint256 endTime = block.timestamp + 7 days;
+
+        proxy.createEvent(
+            "Revenue Test Event",
+            TICKET_PRICE,
+            MAX_TICKETS,
+            startTime,
+            endTime,
+            "https://example.com/ticket",
+            LibStorage.EventType.Paid,
+            EVENT_EXPENSES
+        );
+
+        // Initially no revenue
+        uint256 initialRevenue = proxy.getEventRevenue(0);
+        assertEq(initialRevenue, 0);
+
+        uint256 initialTicketsSold = proxy.getTicketTotalSale(0);
+        assertEq(initialTicketsSold, 0);
+        
+        vm.stopPrank();
+    }
+
+    function testEventIdIncrementation() public {
+        vm.startPrank(user);
+        
+        uint256 startTime = block.timestamp + 1 days;
+        uint256 endTime = block.timestamp + 7 days;
+
+        proxy.createEvent(
+            "Event 0",
+            TICKET_PRICE,
+            MAX_TICKETS,
+            startTime,
+            endTime,
+            "https://example.com/ticket0",
+            LibStorage.EventType.Paid,
+            EVENT_EXPENSES
+        );
+
+        proxy.createEvent(
+            "Event 1",
+            TICKET_PRICE,
+            MAX_TICKETS,
+            startTime,
+            endTime,
+            "https://example.com/ticket1",
+            LibStorage.EventType.Free,
+            EVENT_EXPENSES
+        );
+
+        LibStorage.EventStruct memory event0 = proxy.getEventInfo(0);
+        LibStorage.EventStruct memory event1 = proxy.getEventInfo(1);
+
+        assertEq(event0.id, 0);
+        assertEq(event1.id, 1);
+        assertEq(event0.name, "Event 0");
+        assertEq(event1.name, "Event 1");
+        
+        vm.stopPrank();
     }
 
     function testFreeEvent() public {
-        EventImplementation freeImpl = new EventImplementation();
-        EventImplementation.TicketTier[] memory freeTiers = new EventImplementation.TicketTier[](1);
-        freeTiers[0] = EventImplementation.TicketTier("Free", 0, 1000, 0);
+        vm.startPrank(user);
+        
+        uint256 startTime = block.timestamp + 1 days;
+        uint256 endTime = block.timestamp + 7 days;
 
-        bytes memory freeInitData = abi.encodeWithSelector(
-            EventImplementation.initialize.selector,
-            owner,
-            2,
-            0, // fundingGoal = 0
+        proxy.createEvent(
+            "Free Event",
+            0, // Free ticket
+            MAX_TICKETS,
             startTime,
             endTime,
-            "Free Event",
-            "A free event",
-            address(ticket),
-            address(payroll),
-            address(paymentToken),
-            address(sponsorVault),
-            7000, // sponsorPercentage
-            500,  // platformFee
-            owner, // platformWallet
-            freeTiers
+            "https://example.com/free-ticket",
+            LibStorage.EventType.Free,
+            EVENT_EXPENSES
         );
 
-        ERC1967Proxy freeProxyContract = new ERC1967Proxy(address(freeImpl), freeInitData);
-        EventImplementation freeProxy = EventImplementation(address(freeProxyContract));
-
-        assertEq(freeProxy.isFreeEvent(), true);
-    }
-
-    function testPurchaseTicket() public {
-        vm.warp(startTime + 1);
-        vm.startPrank(alice);
-        paymentToken.mint(alice, 1 ether);
-        paymentToken.approve(address(proxy), 1 ether);
-
-        // Purchase VIP ticket (tier 0)
-        proxy.purchaseTicket(0);
-
-        // Check ticket was minted and tier sold count increased
-        (string memory name, uint256 price, uint256 maxSupply, uint256 sold) = proxy.ticketTiers(0);
-        assertEq(sold, 1);
-        assertEq(proxy.currentBalance(), 1 ether);
-        vm.stopPrank();
-    }
-
-    function testPurchaseTicketSoldOut() public {
-        vm.warp(startTime + 1);
-
-        // Fill VIP tier (max 10)
-        for (uint256 i = 0; i < 10; i++) {
-            address buyer = makeAddr(string(abi.encodePacked("buyer", i)));
-            vm.startPrank(buyer);
-            paymentToken.mint(buyer, 1 ether);
-            paymentToken.approve(address(proxy), 1 ether);
-            proxy.purchaseTicket(0);
-            vm.stopPrank();
-        }
-
-        // Try to buy 11th VIP ticket
-        address buyer11 = makeAddr("buyer11");
-        vm.startPrank(buyer11);
-        paymentToken.mint(buyer11, 1 ether);
-        paymentToken.approve(address(proxy), 1 ether);
-        vm.expectRevert("Ticket tier sold out");
-        proxy.purchaseTicket(0);
-        vm.stopPrank();
-    }
-
-    function testPurchaseTicketInvalidTier() public {
-        vm.warp(startTime + 1);
-        vm.startPrank(alice);
-        paymentToken.mint(alice, 1 ether);
-        paymentToken.approve(address(proxy), 1 ether);
-
-        vm.expectRevert("Invalid ticket tier");
-        proxy.purchaseTicket(99); // Invalid tier
+        LibStorage.EventStruct memory eventInfo = proxy.getEventInfo(0);
+        assertEq(eventInfo.ticketPrice, 0);
+        assertEq(uint(eventInfo.eventType), uint(LibStorage.EventType.Free));
+        
         vm.stopPrank();
     }
 }
