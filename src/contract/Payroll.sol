@@ -2,6 +2,8 @@
 pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "forge-std/console.sol";
+
 import {IPayroll} from "../contract/interface/IPayroll.sol";
 import {LibStorage} from "./libraries/LibStorage.sol";
 
@@ -18,7 +20,7 @@ contract Payroll is IPayroll {
 
     modifier onlyAuthorized() {
         LibStorage.AppStorage storage libStorage = LibStorage.appStorage();
-        require(msg.sender == libStorage.owner || libStorage.admins[msg.sender] , "Not owner");
+        require(msg.sender == libStorage.owner || libStorage.admins[msg.sender] , "payroll: Not owner");
         _;
     }
 
@@ -113,8 +115,11 @@ contract Payroll is IPayroll {
         return libStorage.eventWorkerList[event_id];
     }
 
-    function getPayrollOwner() external view returns (address) {
+    event moduleOwner(address indexed owner, string moduleName);
+
+    function getPayrollOwner() external  returns (address) {
         LibStorage.AppStorage storage libStorage = LibStorage.appStorage();
+        emit moduleOwner(libStorage.owner, "payroll");
         return libStorage.owner;
     }
 

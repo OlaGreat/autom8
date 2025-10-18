@@ -74,8 +74,12 @@ contract EventTicket is ITicket {
         return owner;
     }
 
-    function getTicketOwner() external view returns (address) {
+    event moduleOwner(address indexed owner, string moduleName);
+
+    function getTicketOwner() external  returns (address) {
         LibStorage.AppStorage storage libStorage = LibStorage.appStorage();
+        emit moduleOwner (libStorage.owner, "ticket");
+
         return libStorage.owner;
     }
 

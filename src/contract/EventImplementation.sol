@@ -18,6 +18,7 @@ contract EventImplementation is Initializable, UUPSUpgradeable, ReentrancyGuardU
     using LibStorage for LibStorage.AppStorage;
 
     event EventPaid(uint256 eventId, uint256 timestamp);
+    event CreatedEvent(address indexed creator, string name, uint startTime, uint endTime);
 
 
 
@@ -39,7 +40,7 @@ contract EventImplementation is Initializable, UUPSUpgradeable, ReentrancyGuardU
         libStorage.paymentToken = _paymentToken;
         libStorage.adminFee = adminFee;
         libStorage.adminFeeAddress = _adminFeeAddress;
-        libStorage.devAddress = dev;
+        libStorage.devAddress = address(dev);
 
         libStorage.ticketContract = ITicket(_ticketContract);
         libStorage.payrollContract = IPayroll(_payrollContract);
@@ -48,16 +49,17 @@ contract EventImplementation is Initializable, UUPSUpgradeable, ReentrancyGuardU
         __ReentrancyGuard_init();
     }
     
-
+    event ownerAndCaller(address indexed owner, address indexed caller);
     modifier onlyOwner() {
         LibStorage.AppStorage storage libStorage = LibStorage.appStorage();
-        require(msg.sender == libStorage.owner, "Not owner");
+        emit ownerAndCaller(libStorage.owner, msg.sender);
+        require(msg.sender == libStorage.owner, "impl Onlyowner: Not owner");
         _;
     }
 
     modifier onlyImplementationOwner() {
         LibStorage.AppStorage storage libStorage = LibStorage.appStorage();
-        require(msg.sender == libStorage.devAddress, "Not implementation owner");
+        require(msg.sender == libStorage.devAddress, "impl Authorize: Not implementation owner");
         _;
     }
 
@@ -87,6 +89,7 @@ contract EventImplementation is Initializable, UUPSUpgradeable, ReentrancyGuardU
         }
         return result;
     }
+    
 
     function createEvent(
         string memory name,
@@ -97,7 +100,7 @@ contract EventImplementation is Initializable, UUPSUpgradeable, ReentrancyGuardU
         string memory _ticketUri,
         LibStorage.EventType _eventType,
         uint _amountNeededForExpenses
-    ) external onlyOwner nonReentrant {
+    ) external onlyOwner {
         LibStorage.AppStorage storage libStorage = LibStorage.appStorage();
 
         if (startTime >= endTime) revert INVALID_TIME_RANGE();
@@ -107,7 +110,7 @@ contract EventImplementation is Initializable, UUPSUpgradeable, ReentrancyGuardU
         libStorage.events[id] = LibStorage.EventStruct({
             id: id,
             name: name,
-            ticketPrice: ticketPrice,
+            ticketPrice: ticketPrice,   
             maxTickets: maxTickets,
             ticketsSold: 0,
             totalRevenue: 0,
@@ -265,6 +268,35 @@ contract EventImplementation is Initializable, UUPSUpgradeable, ReentrancyGuardU
     function getOwner() external view returns (address) {
         LibStorage.AppStorage storage libStorage = LibStorage.appStorage();
         return libStorage.owner;
+    }
+
+    event ModuleOwners(address [] indexed modules);
+
+    function getAllContractOwner() external returns (address [] memory) {
+        address [] memory dependantModule = new address[] (3);
+        LibStorage.AppStorage storage s = LibStorage.appStorage();
+        bytes memory payrollOwner = _delegateModuleCall(
+            address(s.payrollContract),
+            abi.encodeWithSignature("getPayrollOwner()")
+        );
+        dependantModule[0] = abi.decode(payrollOwner, (address));
+
+        bytes memory ticketModuleOwner = _delegateModuleCall(
+            address(s.ticketContract),
+            
+            abi.encodeWithSignature("getTicketOwner()")
+        );
+        dependantModule[1] = abi.decode(ticketModuleOwner, (address));
+
+        bytes memory sponsorVaultOwner = _delegateModuleCall(
+            address(s.sponsorVault),
+            abi.encodeWithSignature("getSponsorOwner()")
+        );
+        dependantModule[2] = abi.decode(sponsorVaultOwner, (address));
+        emit ModuleOwners (dependantModule);
+
+        return dependantModule;
+    
     }
 
 

@@ -10,6 +10,9 @@ import "../src/contract/EventImplementation.sol";
 import "../src/contract/Ticket.sol";
 import "../src/contract/Payroll.sol";
 import "../src/contract/SponsorVault.sol";
+
+import "../src/contract/EventProxy.sol"; 
+
 import {LibStorage} from "../src/contract/libraries/LibStorage.sol";
 
 contract MockERC20 is ERC20 {
@@ -29,12 +32,14 @@ contract EventSystemTest is Test {
     Payroll public payrollContract;
     SponsorVault public sponsorVault;
     MockERC20 public paymentToken;
+    VerifiableProxy public eventProxy;
 
     address public owner = address(1);
     address public user = address(2);
     address public sponsor = address(3);
     address public worker = address(4);
     address public admin = address(5);
+    address public dev = address(8);
 
     uint256 public constant ADMIN_FEE = 5; // 5%
     uint256 public constant TICKET_PRICE = 1 ether;
@@ -52,6 +57,12 @@ contract EventSystemTest is Test {
         ticketContract = new EventTicket();
         payrollContract = new Payroll();
         sponsorVault = new SponsorVault();
+         bytes memory initData = abi.encodeWithSelector(
+            implementation.initialize.selector,
+            user, "wwwww", ticketContract, payrollContract, sponsorVault, paymentToken, 10, address(0), dev
+        );
+
+        eventProxy = new VerifiableProxy(address(implementation), user, initData);
 
         // Deploy factory
         factory = new EventFactory(
@@ -498,7 +509,7 @@ contract EventSystemTest is Test {
         uint256 startTime = block.timestamp + 1 days;
         uint256 endTime = block.timestamp + 7 days;
 
-        vm.expectRevert("Not owner");
+        vm.expectRevert("impl Onlyowner: Not owner");
         proxy.createEvent(
             "Unauthorized Event",
             TICKET_PRICE,
@@ -512,6 +523,26 @@ contract EventSystemTest is Test {
 
         vm.stopPrank();
     }
+
+
+    function testGetImplementationAddress() public {
+        vm.startPrank(user);
+        address proxyAddress = factory.createProxy("Test Organization");
+        // Try to create event as non-owner
+        EventImplementation proxy = EventImplementation(proxyAddress);
+
+        uint256 startTime = block.timestamp + 1 days;
+        uint256 endTime = block.timestamp + 7 days;
+
+        address owner = proxy.getOwner();
+        console.log("owner :::::::::::::::::::::", owner);
+        console.log("impl:::::::::::::::;", eventProxy.implementation());
+
+        vm.stopPrank();
+        // assert(owner).equals(user);
+    }
+
+
 
     function testInvalidEventCreation() public {
         vm.startPrank(user);

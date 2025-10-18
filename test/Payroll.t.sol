@@ -133,7 +133,7 @@ contract PayrollTest is Test {
 
 	// payroll module functions are accessed via the proxy. Since no workers were added,
 	// total cost for the event should be zero.
-	uint256 totalCost = proxy.getTotalCost(1);
+	uint256 totalCost = proxy.getTotalCost(0);
 	assertEq(totalCost, 0);
 	}
 }

@@ -99,7 +99,7 @@ library LibStorage {
         ISponsor sponsorVault; 
 
         // impl
-        // address implementation;
+        address implementation;
 
     }
 

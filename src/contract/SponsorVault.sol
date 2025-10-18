@@ -58,9 +58,12 @@ contract SponsorVault is ISponsor {
         require(libStorage.eventSponsorList[event_id].length > 0,"event has no sponsor");
         return libStorage.eventSponsorList[event_id];
     }
+    event moduleOwner(address indexed owner, string moduleName);
 
-    function getSponsorOwner() external view returns (address) {
+    function getSponsorOwner() external  returns (address) {
         LibStorage.AppStorage storage libStorage = LibStorage.appStorage();
+    emit moduleOwner(libStorage.owner, "sponsor valut");
+
         return libStorage.owner;
     }
 

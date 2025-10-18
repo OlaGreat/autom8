@@ -71,7 +71,7 @@ contract EventImplementationTest is Test {
         paymentToken.mint(user, 100 ether);
     }
 
-    function testCreateEvent() public {
+    function testCreateEventImpl() public {
         vm.startPrank(user);
         
         uint256 startTime = block.timestamp + 1 days;
@@ -103,12 +103,12 @@ contract EventImplementationTest is Test {
     }
 
     function testOnlyOwnerCanCreateEvent() public {
-        vm.startPrank(address(999)); // Non-owner
+        vm.startPrank(address(999)); 
         
         uint256 startTime = block.timestamp + 1 days;
         uint256 endTime = block.timestamp + 7 days;
 
-        vm.expectRevert("Not owner");
+        vm.expectRevert("impl: Not owner");
         proxy.createEvent(
             "Unauthorized Event",
             TICKET_PRICE,
@@ -275,6 +275,8 @@ contract EventImplementationTest is Test {
         uint256 startTime = block.timestamp + 1 days;
         uint256 endTime = block.timestamp + 7 days;
 
+    
+
         proxy.createEvent(
             "Free Event",
             0, // Free ticket
@@ -291,5 +293,74 @@ contract EventImplementationTest is Test {
         assertEq(uint(eventInfo.eventType), uint(LibStorage.EventType.Free));
         
         vm.stopPrank();
+
     }
+
+
+    function testAddWorkersToPayroll() public {
+    // First create an event
+    vm.startPrank(user);
+    uint256 startTime = block.timestamp + 1 days;
+    uint256 endTime = block.timestamp + 7 days;
+    
+    proxy.createEvent(
+        "Test Event",
+        TICKET_PRICE,
+        MAX_TICKETS,
+        startTime,
+        endTime,
+        "https://example.com/ticket",
+        LibStorage.EventType.Paid,
+        EVENT_EXPENSES
+    );
+    vm.stopPrank();
+
+    // Create array of workers
+    LibStorage.WorkerInfo[] memory workers = new LibStorage.WorkerInfo[](2);
+    
+    // First worker
+    workers[0] = LibStorage.WorkerInfo({
+        salary: 5 ether,
+        paid: false,
+        description: "Security",
+        employee: address(4),
+        position: 0
+    });
+
+    // Second worker
+    workers[1] = LibStorage.WorkerInfo({
+        salary: 3 ether,
+        paid: false,
+        description: "Cleaner",
+        employee: address(5),
+        position: 1
+    });
+
+    // Add workers to payroll
+    vm.startPrank(user);
+    proxy.addWorkersToPayroll(workers, 0);
+
+    // Verify workers were added correctly
+    LibStorage.WorkerInfo memory worker1 = proxy.getWorkerInfo(address(4), 0);
+    LibStorage.WorkerInfo memory worker2 = proxy.getWorkerInfo(address(5), 0);
+
+    // Assert first worker
+    assertEq(worker1.salary, 5 ether, "Worker 1 salary mismatch");
+    assertEq(worker1.paid, false, "Worker 1 paid status mismatch");
+    assertEq(worker1.description, "Security", "Worker 1 description mismatch");
+    assertEq(worker1.employee, address(4), "Worker 1 address mismatch");
+    assertEq(worker1.position, 0, "Worker 1 position mismatch");
+
+    // Assert second worker
+    assertEq(worker2.salary, 3 ether, "Worker 2 salary mismatch");
+    assertEq(worker2.paid, false, "Worker 2 paid status mismatch");
+    assertEq(worker2.description, "Cleaner", "Worker 2 description mismatch");
+    assertEq(worker2.employee, address(5), "Worker 2 address mismatch");
+    assertEq(worker2.position, 1, "Worker 2 position mismatch");
+
+    // Verify total cost was updated correctly
+    uint256 totalCost = proxy.getTotalCost(0);
+    assertEq(totalCost, 8 ether, "Total cost mismatch");
+    vm.stopPrank();
+}
 }

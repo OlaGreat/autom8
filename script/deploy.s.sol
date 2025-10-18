@@ -28,7 +28,7 @@ contract EventDeployScript is Script {
         ticketContract = new EventTicket();
         payrollContract = new Payroll();
         sponsorVault = new SponsorVault();
-        paymentToken = new MockUSDT();
+        paymentToken = MockUSDT(0x05C3e3bAEbdDC1A658A4551f1dD853D5f922a3A9);
 
         bytes memory initData = abi.encodeWithSelector(
             EventImplementation.initialize.selector,

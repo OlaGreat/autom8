@@ -1,9 +1,6 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
-
-/// @title VerifiableProxy (EIP-1967 style)
-/// @notice Minimal, verifiable proxy using EIP-1967 storage slots.
-///         Admin can upgrade implementation via `upgradeTo` / `upgradeToAndCall`.
+import {LibStorage} from "./libraries/LibStorage.sol";
 contract VerifiableProxy {
     /// @dev EIP-1967 implementation slot: keccak256("eip1967.proxy.implementation") - 1
     bytes32 internal constant _IMPLEMENTATION_SLOT = 0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc;
@@ -11,7 +8,6 @@ contract VerifiableProxy {
     /// @dev EIP-1967 admin slot: keccak256("eip1967.proxy.admin") - 1
     bytes32 internal constant _ADMIN_SLOT = 0xb53127684a568b3173ae13b9f8a6016e0b4f0c9f3d6c0a6a3f7e4b2f5a8f6e5b;
 
-    /// @dev Events
     event Upgraded(address indexed implementation);
     event AdminChanged(address indexed previousAdmin, address indexed newAdmin);
 
@@ -97,13 +93,35 @@ contract VerifiableProxy {
        Low-level delegate logic (fallback / receive)
        --------------------------------------------------------------------- */
 
-    fallback () external payable {
-        _delegate(implementation());
+    // fallback () external payable {
+    //     _delegate(implementation());
+    // }
+
+    fallback() external payable {
+        address impl = implementation();
+        require(impl != address(0), "Proxy: implmentation does not exist");
+        // Execute external function from facet using delegatecall and return any value.
+        assembly {
+            // copy function selector and any arguments
+            calldatacopy(0, 0, calldatasize())
+            // execute function call using the facet
+            let result := delegatecall(gas(), impl, 0, calldatasize(), 0, 0)
+            // get any return value
+            returndatacopy(0, 0, returndatasize())
+            // return any return value or error back to the caller
+            switch result
+            case 0 {
+                revert(0, returndatasize())
+            }
+            default {
+                return(0, returndatasize())
+            }
+        }
     }
 
-    receive() external payable {
-        _delegate(implementation());
-    }
+    // receive() external payable {
+    //     _delegate(implementation());
+    // }
 
     /// @dev Internal delegate helper (bubbles revert reasons)
     function _delegate(address impl) internal {
