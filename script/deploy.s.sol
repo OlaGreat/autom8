@@ -9,6 +9,8 @@ import {EventImplementation} from "../src/contract/EventImplementation.sol";
 import {EventFactory} from "../src/contract/EventFactory.sol";
 import {MockUSDT} from "../src/contract/MockUsdt.sol";
 import {VerifiableProxy} from "../src/contract/EventProxy.sol";
+import {GlobalEventRegistry} from "../src/contract/GlobalEventRegistry.sol";
+import {IGlobalEventRegistry} from "../src/contract/interface/IGlobalEventRegistry.sol";
 
 contract EventDeployScript is Script {
     EventFactory public factory;
@@ -18,12 +20,17 @@ contract EventDeployScript is Script {
     SponsorVault public sponsorVault;
     MockUSDT public paymentToken;
     VerifiableProxy public eventProxy;
+    GlobalEventRegistry public globalEventRegistry;
 
 
     function setUp() public {}
 
     function run() public {
         vm.startBroadcast();
+        
+        // Deploy Global Event Registry first
+        globalEventRegistry = new GlobalEventRegistry();
+        
         implementation = new EventImplementation();
         ticketContract = new EventTicket();
         payrollContract = new Payroll();
@@ -32,12 +39,21 @@ contract EventDeployScript is Script {
 
         bytes memory initData = abi.encodeWithSelector(
             EventImplementation.initialize.selector,
-            msg.sender, "", ticketContract, payrollContract, sponsorVault, paymentToken, 0, msg.sender, msg.sender
+            msg.sender, "", ticketContract, payrollContract, sponsorVault, paymentToken, 0, msg.sender, msg.sender, address(globalEventRegistry)
         );
 
         eventProxy = new VerifiableProxy(address(implementation), msg.sender, initData);
 
-        factory = new EventFactory (address(implementation), address(ticketContract), address(payrollContract), address(sponsorVault), address(paymentToken), 10, msg.sender);
+        factory = new EventFactory(
+            address(implementation), 
+            address(ticketContract), 
+            address(payrollContract), 
+            address(sponsorVault), 
+            address(paymentToken), 
+            10, 
+            msg.sender,
+            address(globalEventRegistry)
+        );
 
         vm.stopBroadcast();
     }

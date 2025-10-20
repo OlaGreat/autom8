@@ -25,6 +25,10 @@ library LibStorage {
         address creator;
         uint256 amountNeededForExpenses;
         bool isPaid;
+        // MVP Enhancement: Additional metadata for better UX
+        string category; // e.g., "conference", "concert", "workshop"
+        string location; // city/country for geo-filtering
+        string[] tags;   // optional tags for searchability
     }
 
     struct WorkerInfo {
@@ -41,6 +45,22 @@ library LibStorage {
         uint256 position;
         uint eventId;
         uint percentageContribution;
+    }
+
+    // New structures for global registry integration
+    struct GlobalEventInfo {
+        uint256 globalId;
+        address organizationProxy;
+        uint256 localEventId;
+        EventStruct eventData;
+    }
+
+    struct SponsorHistory {
+        uint256 eventId;
+        address organizationProxy;
+        uint256 amount;
+        uint256 timestamp;
+        string eventName;
     }
 
     struct AppStorage {
@@ -72,7 +92,7 @@ library LibStorage {
         mapping(uint256 => mapping(address => WorkerInfo)) eventWorkers;
         mapping(uint256 => WorkerInfo[]) eventWorkerList;
         mapping(uint256 => uint256) totalCost;
-        // tracks balance to be spend on workers for each event. 
+        // tracks balance to be spend on workers for each event.
         mapping(uint256 => uint256) expensesBalance;
 
         // sponsors
@@ -95,8 +115,11 @@ library LibStorage {
 
         // dependency contracts
         ITicket ticketContract;
-        IPayroll payrollContract; 
-        ISponsor sponsorVault; 
+        IPayroll payrollContract;
+        ISponsor sponsorVault;
+
+        // MVP Enhancement: Global registry integration
+        address globalEventRegistry;
 
         // impl
         address implementation;
