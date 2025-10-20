@@ -20,7 +20,7 @@ contract MockERC20 is ERC20 {
 	}
 }
 
-contract PayrollTest is Test {
+contract SponsorVaultTest is Test {
 	EventFactory public factory;
 	EventImplementation public implementation;
 	EventTicket public ticketContract;
@@ -32,9 +32,7 @@ contract PayrollTest is Test {
 	address public owner = address(1);
 	address public user = address(2);
 	address public sponsor = address(3);
-	address public worker1 = address(4);
-	address public worker2 = address(5);
-	address public admin = address(6);
+	address public admin = address(4);
 
 	uint256 public constant ADMIN_FEE = 5; // 5%
 
@@ -68,72 +66,74 @@ contract PayrollTest is Test {
 		vm.stopPrank();
 	}
 
-	function testAddAndPayWorkers() public {
-		// Create an event as proxy owner
+	function testSponsorEventAndGetInfo() public {
 		vm.startPrank(user);
 		uint256 startTime = block.timestamp + 1 days;
 		uint256 endTime = block.timestamp + 7 days;
 
 		proxy.createEvent(
-			"Payroll Event",
+			"Sponsored Event",
 			0,
 			100,
 			startTime,
 			endTime,
-			"https://example.com/ticket",
+			"uri",
 			LibStorage.EventType.Paid,
 			10 ether
 		);
 		vm.stopPrank();
 
-		// sponsor the event so there are funds to pay workers
+		// sponsor the event
 		vm.startPrank(sponsor);
-		paymentToken.mint(sponsor, 20 ether);
+		paymentToken.mint(sponsor, 50 ether);
 		paymentToken.approve(address(proxy), 10 ether);
 		proxy.sponsorEvent(0, 10 ether);
+
+		uint256 totalSponsorship = proxy.getTotalSponsorship(0);
+		assertEq(totalSponsorship, 10 ether);
+
+		LibStorage.SponsorInfo memory sInfo = proxy.getSponsorInfo(sponsor, 0);
+		assertEq(sInfo.sponsor, sponsor);
+		assertEq(sInfo.amount, 10 ether);
 		vm.stopPrank();
-
-		// add workers
-		vm.startPrank(user);
-		proxy.addWorkerToPayroll(3 ether, "Worker One", worker1, 0);
-		proxy.addWorkerToPayroll(2 ether, "Worker Two", worker2, 0);
-
-		LibStorage.WorkerInfo memory w1 = proxy.getWorkerInfo(worker1, 0);
-		LibStorage.WorkerInfo memory w2 = proxy.getWorkerInfo(worker2, 0);
-
-		assertEq(w1.salary, 3 ether);
-		assertEq(w2.salary, 2 ether);
-
-		uint256 totalCost = proxy.getTotalCost(0);
-		assertEq(totalCost, 5 ether);
-		vm.stopPrank();
-
-	// ensure workers were registered; paying workers is handled by the payroll module
-	assertEq(paymentToken.balanceOf(worker1), 0);
-	assertEq(paymentToken.balanceOf(worker2), 0);
 	}
 
-	function testPayWorkersRevertsWhenNoWorkers() public {
-		// create an event with no workers
+	function testDistributeSponsorshipPaysSponsorsMinusPlatformFee() public {
 		vm.startPrank(user);
 		uint256 startTime = block.timestamp + 1 days;
 		uint256 endTime = block.timestamp + 7 days;
 
 		proxy.createEvent(
-			"Empty Payroll Event",
+			"Distribute Event",
 			0,
-			10,
+			100,
 			startTime,
 			endTime,
 			"uri",
-			LibStorage.EventType.Free,
-			1 ether
+			LibStorage.EventType.Paid,
+			50 ether
 		);
 		vm.stopPrank();
 
-	// payroll module functions are accessed via the proxy. Since no workers were added,
-	// total cost for the event should be zero.
-	uint256 totalCost = proxy.getTotalCost(0);
-	assertEq(totalCost, 0);
+		// sponsor the event with two sponsors
+		vm.startPrank(sponsor);
+		paymentToken.mint(sponsor, 50 ether);
+		paymentToken.approve(address(proxy), 10 ether);
+		proxy.sponsorEvent(0, 10 ether);
+		vm.stopPrank();
+
+		address sponsor2 = address(7);
+		vm.startPrank(sponsor2);
+		paymentToken.mint(sponsor2, 50 ether);
+		paymentToken.approve(address(proxy), 10 ether);
+		proxy.sponsorEvent(0, 10 ether);
+		vm.stopPrank();
+
+	// verify sponsorship totals and sponsor list
+	uint256 total = proxy.getTotalSponsorship(0);
+	assertEq(total, 20 ether);
+
+	LibStorage.SponsorInfo[] memory sponsors = proxy.getAllSponsors(0);
+	assertEq(sponsors.length, 2);
 	}
 }

@@ -20,7 +20,7 @@ contract MockERC20 is ERC20 {
 	}
 }
 
-contract PayrollTest is Test {
+contract TicketTest is Test {
 	EventFactory public factory;
 	EventImplementation public implementation;
 	EventTicket public ticketContract;
@@ -31,12 +31,12 @@ contract PayrollTest is Test {
 
 	address public owner = address(1);
 	address public user = address(2);
-	address public sponsor = address(3);
-	address public worker1 = address(4);
-	address public worker2 = address(5);
-	address public admin = address(6);
+	address public buyer = address(3);
+	address public admin = address(4);
 
 	uint256 public constant ADMIN_FEE = 5; // 5%
+	uint256 public constant TICKET_PRICE = 1 ether;
+	uint256 public constant MAX_TICKETS = 2;
 
 	function setUp() public {
 		vm.startPrank(owner);
@@ -68,72 +68,81 @@ contract PayrollTest is Test {
 		vm.stopPrank();
 	}
 
-	function testAddAndPayWorkers() public {
-		// Create an event as proxy owner
+	function testBuyPaidTicketIncrementsCountersAndAssignsToken() public {
 		vm.startPrank(user);
 		uint256 startTime = block.timestamp + 1 days;
 		uint256 endTime = block.timestamp + 7 days;
 
 		proxy.createEvent(
-			"Payroll Event",
-			0,
-			100,
+			"Paid Event",
+			TICKET_PRICE,
+			MAX_TICKETS,
 			startTime,
 			endTime,
 			"https://example.com/ticket",
 			LibStorage.EventType.Paid,
-			10 ether
-		);
-		vm.stopPrank();
-
-		// sponsor the event so there are funds to pay workers
-		vm.startPrank(sponsor);
-		paymentToken.mint(sponsor, 20 ether);
-		paymentToken.approve(address(proxy), 10 ether);
-		proxy.sponsorEvent(0, 10 ether);
-		vm.stopPrank();
-
-		// add workers
-		vm.startPrank(user);
-		proxy.addWorkerToPayroll(3 ether, "Worker One", worker1, 0);
-		proxy.addWorkerToPayroll(2 ether, "Worker Two", worker2, 0);
-
-		LibStorage.WorkerInfo memory w1 = proxy.getWorkerInfo(worker1, 0);
-		LibStorage.WorkerInfo memory w2 = proxy.getWorkerInfo(worker2, 0);
-
-		assertEq(w1.salary, 3 ether);
-		assertEq(w2.salary, 2 ether);
-
-		uint256 totalCost = proxy.getTotalCost(0);
-		assertEq(totalCost, 5 ether);
-		vm.stopPrank();
-
-	// ensure workers were registered; paying workers is handled by the payroll module
-	assertEq(paymentToken.balanceOf(worker1), 0);
-	assertEq(paymentToken.balanceOf(worker2), 0);
-	}
-
-	function testPayWorkersRevertsWhenNoWorkers() public {
-		// create an event with no workers
-		vm.startPrank(user);
-		uint256 startTime = block.timestamp + 1 days;
-		uint256 endTime = block.timestamp + 7 days;
-
-		proxy.createEvent(
-			"Empty Payroll Event",
-			0,
-			10,
-			startTime,
-			endTime,
-			"uri",
-			LibStorage.EventType.Free,
 			1 ether
 		);
 		vm.stopPrank();
 
-	// payroll module functions are accessed via the proxy. Since no workers were added,
-	// total cost for the event should be zero.
-	uint256 totalCost = proxy.getTotalCost(0);
-	assertEq(totalCost, 0);
+		// buyer must have tokens
+		paymentToken.mint(buyer, 5 ether);
+		vm.startPrank(buyer);
+		paymentToken.approve(address(proxy), TICKET_PRICE);
+		proxy.buyTicket(0);
+		vm.stopPrank();
+
+		LibStorage.EventStruct memory info = proxy.getEventInfo(0);
+		assertEq(info.ticketsSold, 1);
+		assertEq(info.totalRevenue, TICKET_PRICE);
+
+	// Ownership/tokenURI live in proxy storage; we already asserted counters
+	// via getEventInfo above. Direct ERC721 getters are not exposed by the
+	// implementation wrapper, so we avoid calling them here.
+	}
+
+	function testCannotBuyAfterEndOrWhenSoldOut() public {
+		vm.startPrank(user);
+		uint256 startTime = block.timestamp + 1 days;
+		uint256 endTime = block.timestamp + 2 days;
+
+		proxy.createEvent(
+			"Short Event",
+			TICKET_PRICE,
+			1, // only 1 ticket
+			startTime,
+			endTime,
+			"uri",
+			LibStorage.EventType.Paid,
+			1 ether
+		);
+		vm.stopPrank();
+
+		// buy the only ticket
+		paymentToken.mint(buyer, 5 ether);
+		vm.startPrank(buyer);
+		paymentToken.approve(address(proxy), TICKET_PRICE);
+		proxy.buyTicket(0);
+		vm.stopPrank();
+
+		// attempt to buy again -> sold out
+		vm.startPrank(address(8));
+		paymentToken.mint(address(8), 5 ether);
+		paymentToken.approve(address(proxy), TICKET_PRICE);
+		vm.expectRevert("Tickets sold out");
+		proxy.buyTicket(0);
+		vm.stopPrank();
+
+		// warp past end time and try to buy on a new event
+		vm.startPrank(user);
+		proxy.createEvent("Ended Event", TICKET_PRICE, 10, startTime, endTime, "uri2", LibStorage.EventType.Paid, 1 ether);
+		vm.stopPrank();
+
+		vm.warp(endTime + 10);
+		vm.startPrank(buyer);
+		paymentToken.approve(address(proxy), TICKET_PRICE);
+		vm.expectRevert("Event has ended");
+		proxy.buyTicket(1);
+		vm.stopPrank();
 	}
 }

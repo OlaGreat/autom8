@@ -2,22 +2,25 @@
 pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {ITicket} from "./interface/ITicket.sol";
-import {LibStorage} from "./libraries/LibStorage.sol";
+import {LibStorage} from "../../libraries/ELibStorage.sol";
 
 error EVENT_ENDED();
 error TICKET_SOLD_OUT();
 error INVALID_TOKEN_ID();
 error NOT_OWNER_OR_APPROVED();
 
-contract EventTicket is ITicket {
+library EventTicketLib  {
 
     event Transfer(address indexed from, address indexed to, uint256 indexed tokenId);
     event Approval(address indexed owner, address indexed approved, uint256 indexed tokenId);
     event ApprovalForAll(address indexed owner, address indexed operator, bool approved);
+    event EventSoldOut(uint indexed eventId);
+    event EventEnded(uint indexed eventId);
+    event TicketPurchased(address indexed buyer, uint256 indexed eventId, uint256 ticketId, uint256 price);
 
 
-    function buyTicket(uint256 eventId) external {
+
+    function buyTicket(uint256 eventId) internal {
         LibStorage.AppStorage storage libStorage = LibStorage.appStorage();
         
         LibStorage.EventStruct storage evt = libStorage.events[eventId];
@@ -67,35 +70,16 @@ contract EventTicket is ITicket {
         s.tokenURIs[tokenId] = uri;
     }
 
-    function ownerOf(uint256 tokenId) external view returns (address) {
+    function ownerOf(uint256 tokenId) internal view returns (address) {
         LibStorage.AppStorage storage s = LibStorage.appStorage();
         address owner = s.owners[tokenId];
         require(owner != address(0), "ERC721: owner query for nonexistent token");
         return owner;
     }
 
-    event moduleOwner(address indexed owner, string moduleName);
 
-    function getTicketOwner() external  returns (address) {
-        LibStorage.AppStorage storage libStorage = LibStorage.appStorage();
-        emit moduleOwner (libStorage.owner, "ticket");
-
-        return libStorage.owner;
-    }
-
-    function balanceOf(address owner) external view returns (uint256) {
-        LibStorage.AppStorage storage s = LibStorage.appStorage();
-        require(owner != address(0), "ERC721: balance query for the zero address");
-        return s.balances[owner];
-    }
-
-    function tokenURI(uint256 tokenId) external view returns (string memory) {
-        LibStorage.AppStorage storage s = LibStorage.appStorage();
-        require(s.owners[tokenId] != address(0), "ERC721: URI query for nonexistent token");
-        return s.tokenURIs[tokenId];
-    }
-
-    function getTicketEvent(uint256 ticketId) external view returns (uint256) {
+  
+    function getTicketEvent(uint256 ticketId) internal view returns (uint256) {
         LibStorage.AppStorage storage s = LibStorage.appStorage();
         require(s.owners[ticketId] != address(0), "ERC721: query for nonexistent token");
         return s.ticketToEvent[ticketId];
