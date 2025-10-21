@@ -108,7 +108,7 @@ contract EventImplementationTest is Test {
         uint256 startTime = block.timestamp + 1 days;
         uint256 endTime = block.timestamp + 7 days;
 
-        vm.expectRevert("impl: Not owner");
+        vm.expectRevert("impl Onlyowner: Not owner");
         proxy.createEvent(
             "Unauthorized Event",
             TICKET_PRICE,

@@ -5,11 +5,13 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 
 import {VerifiableProxy} from "./Event-proxy.sol";
 import {EventImplementation} from "./Event.sol";
+// import 
 
 
 error USER_ALREADY_REGISTERED();
 error USER_NOT_REGISTERD();
 error INVALID_ADDRESS();
+error FACTORY_HAS_NO_PROXY();
 
 contract EventFactory is Ownable {
     address public implementation;
@@ -17,6 +19,7 @@ contract EventFactory is Ownable {
     uint public adminFee;
     address public adminFeeAddress;
     address public dev;
+    address private globalRegistry;
     
     mapping(address => address) public proxies;
     mapping(address => bool) public authorizedDeployers;
@@ -27,12 +30,13 @@ contract EventFactory is Ownable {
     event DeployerAuthorized(address indexed deployer);
     event DeployerRevoked(address indexed deployer);
 
-    constructor(address _implementation, address _paymentToken, uint _adminFee, address _adminFeeAddress) Ownable(msg.sender) {
+    constructor(address _implementation, address _paymentToken, uint _adminFee, address _adminFeeAddress, address _globalRegistry) Ownable(msg.sender) {
         implementation = _implementation;
         paymentToken = _paymentToken;
         adminFee = _adminFee;
         adminFeeAddress = _adminFeeAddress;
         dev = msg.sender;
+        globalRegistry = _globalRegistry;
     }
 
     modifier onlyAuthorized() {
@@ -63,7 +67,7 @@ contract EventFactory is Ownable {
         
         bytes memory initData = abi.encodeWithSelector(
             EventImplementation.initialize.selector,
-            msg.sender, orgName, paymentToken, adminFee, adminFeeAddress, dev
+            msg.sender, orgName, paymentToken, adminFee, adminFeeAddress, dev, globalRegistry
         );
 
         VerifiableProxy proxy = new VerifiableProxy(implementation, msg.sender, initData);
@@ -81,5 +85,21 @@ contract EventFactory is Ownable {
         if (proxies[owner] == address(0)) revert USER_NOT_REGISTERD();
         return proxies[owner];
     }
+
+
+    function autoPay() external {
+        if (proxiesList.length == 0 ) revert FACTORY_HAS_NO_PROXY();
+        
+        for (uint i = 0; i < proxiesList.length; i++) {
+            address proxy = proxiesList[i];
+            bytes memory data = abi.encodeWithSelector(EventImplementation.pay.selector);
+            (bool success, ) = address(proxy).call(data);
+            if (!success) continue;
+        }
+        
+    }
+
+
+
 
 }

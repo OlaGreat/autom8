@@ -9,6 +9,7 @@ import {EventTicketLib} from "./library/TicketManger.sol";
 import {SponsorLib} from "./library/Sponsor.sol";
 import {PayrollLib} from "./library/Pay-roll.sol";
 import {LibStorage} from "../libraries/ELibStorage.sol";
+import {IGlobalEventRegistry} from "../interface/IGlobalEventRegistry.sol";
 
 error INVALID_TIME_RANGE();
 error START_MUST_BE_IN_FUTURE();
@@ -35,7 +36,8 @@ contract EventImplementation is Initializable, UUPSUpgradeable, ReentrancyGuard 
         address _paymentToken,
         uint adminFee,
         address _adminFeeAddress,
-        address dev
+        address dev,
+        address _globalRegistry
         ) external initializer {
         LibStorage.AppStorage storage libStorage = LibStorage.appStorage();
         libStorage.owner = _owner;
@@ -45,6 +47,7 @@ contract EventImplementation is Initializable, UUPSUpgradeable, ReentrancyGuard 
         libStorage.adminFee = adminFee;
         libStorage.adminFeeAddress = _adminFeeAddress;
         libStorage.devAddress = dev;
+        libStorage.globalRegistry = IGlobalEventRegistry(_globalRegistry);
     }
     
 
@@ -56,7 +59,10 @@ contract EventImplementation is Initializable, UUPSUpgradeable, ReentrancyGuard 
         uint256 endTime,
         string memory ticketUri,
         LibStorage.EventType eventType,
-        uint amountNeeded
+        uint amountNeeded,
+        string memory _category,
+        string memory _location,
+        string[] memory _tags
     ) external onlyOwner {
         require(startTime < endTime, "Invalid time range");
         require(startTime > block.timestamp, "Start must be future");
@@ -78,12 +84,18 @@ contract EventImplementation is Initializable, UUPSUpgradeable, ReentrancyGuard 
             eventType: eventType,
             creator: msg.sender,
             amountNeededForExpenses: amountNeeded,
-            isPaid: false
+            isPaid: false,
+            category : _category,
+            location: _location,
+            tags: _tags
         });
 
         s.allEvent.push(s.events[id]);
         s.unpaidEvents.push(s.events[id]);
         s.nextEventId++;
+        LibStorage.EventStruct memory newEvent = s.events[id];
+
+        s.globalRegistry.addEvent(newEvent);
 
         emit EventCreated(msg.sender, name, startTime, endTime);
     }
@@ -93,7 +105,11 @@ contract EventImplementation is Initializable, UUPSUpgradeable, ReentrancyGuard 
     }
 
     function sponsorEvent(uint256 eventId, uint256 amount) external nonReentrant {
-        SponsorLib.sponsorEvent(amount, eventId);
+        LibStorage.EventStruct memory sposoredEvent = SponsorLib.sponsorEvent(amount, eventId);
+        LibStorage.AppStorage storage libStorage = LibStorage.appStorage();
+
+        libStorage.globalRegistry.sponsorEvent(msg.sender, sposoredEvent);
+        libStorage.globalRegistry.addSponsoredAmount(msg.sender, amount);
     }
 
     function addWorkersToPayroll(LibStorage.WorkerInfo[] memory workers, uint256 eventId) external onlyOwner {
@@ -110,6 +126,10 @@ contract EventImplementation is Initializable, UUPSUpgradeable, ReentrancyGuard 
 
     function updateWorkerSalary(address emp, uint256 newSalary, uint256 eventId) external onlyOwner {
         PayrollLib.updateWorkerSalary(emp, newSalary, eventId);
+    }
+
+    function removeworkerfromPayroll (uint event_id, address employee) external onlyOwner {
+        PayrollLib.removeWorker(event_id, employee);
     }
 
     function getEventInfo(uint256 eventId) external view returns (LibStorage.EventStruct memory) {

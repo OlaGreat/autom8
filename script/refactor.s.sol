@@ -10,12 +10,14 @@ import {EventImplementation} from "../src/contract/refactor/Event.sol";
 import {EventFactory} from "../src/contract/refactor/Event-Factory.sol";
 import {MockUSDT} from "../src/contract/MockUsdt.sol";
 import {VerifiableProxy} from "../src/contract/refactor/Event-proxy.sol";
+import {GlobalEventRegistry} from "../src/contract/refactor/manager/GlobalEventRegistry.sol";
 
 contract EventDeployScript is Script {
     EventFactory public factory;
     EventImplementation public implementation;
     MockUSDT public paymentToken;
     VerifiableProxy public eventProxy;
+    GlobalEventRegistry public globalRegistry;
 
 
     function setUp() public {}
@@ -25,6 +27,7 @@ contract EventDeployScript is Script {
         implementation = new EventImplementation();
 
         paymentToken = MockUSDT(0x05C3e3bAEbdDC1A658A4551f1dD853D5f922a3A9);
+        globalRegistry = new GlobalEventRegistry();
     
         bytes memory initData = abi.encodeWithSelector(
             EventImplementation.initialize.selector,
@@ -33,7 +36,7 @@ contract EventDeployScript is Script {
 
         eventProxy = new VerifiableProxy(address(implementation), msg.sender, initData);
 
-        factory = new EventFactory (address(implementation), address(paymentToken), 10, msg.sender);
+        factory = new EventFactory (address(implementation), address(paymentToken), 10, msg.sender, address(globalRegistry));
 
         vm.stopBroadcast();
     }
