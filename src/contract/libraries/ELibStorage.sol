@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import "../interface/IGlobalEventRegistry.sol";
+
 
 library LibStorage {
     bytes32 constant STORAGE_SLOT = keccak256("autom8.contract.storage");
-    enum Status { Inactive, Active, SoldOut, Ended }
+    enum Status {Inactive,SoldOut,Active,Ended }
     enum EventType { Free, Paid }
 
     struct EventStruct {
@@ -22,6 +24,9 @@ library LibStorage {
         address creator;
         uint256 amountNeededForExpenses;
         bool isPaid;
+        string category; // e.g., "conference", "concert", "workshop"
+        string location; // city/country for geo-filtering
+        string[] tags;   // optional tags for searchability
     }
 
     struct WorkerInfo {
@@ -85,6 +90,8 @@ library LibStorage {
         uint256 adminFee;
         address adminFeeAddress;
         address devAddress;
+
+        IGlobalEventRegistry globalRegistry;
 
 
     }

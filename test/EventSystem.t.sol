@@ -531,13 +531,7 @@ contract EventSystemTest is Test {
         // Try to create event as non-owner
         EventImplementation proxy = EventImplementation(proxyAddress);
 
-        uint256 startTime = block.timestamp + 1 days;
-        uint256 endTime = block.timestamp + 7 days;
-
-        address owner = proxy.getOwner();
-        console.log("owner :::::::::::::::::::::", owner);
-        console.log("impl:::::::::::::::;", eventProxy.implementation());
-
+        
         vm.stopPrank();
         // assert(owner).equals(user);
     }

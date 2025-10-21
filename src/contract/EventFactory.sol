@@ -92,4 +92,5 @@ contract EventFactory is Ownable, ReentrancyGuard {
         return proxies[owner];
     }
 
+
 }

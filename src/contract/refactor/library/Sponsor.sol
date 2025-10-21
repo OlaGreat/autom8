@@ -16,7 +16,7 @@ library SponsorLib {
     event EventSponsored(address indexed sponsor, uint256 amount, uint256 eventId);
 
 
-    function sponsorEvent(uint256 amount, uint256 event_id) internal  {
+    function sponsorEvent(uint256 amount, uint256 event_id) internal returns (LibStorage.EventStruct memory) {
         LibStorage.AppStorage storage libStorage = LibStorage.appStorage();
         require(event_id < libStorage.nextEventId, "Event does not exist");
         if (amount == 0) revert INVALID_AMOUNT_TO_DEPOSIT();
@@ -41,7 +41,9 @@ library SponsorLib {
         libStorage.totalSponsorship[event_id] += amount;
         libStorage.eventBalances[event_id] += amount;
         libStorage.expensesBalance[event_id] += amount;
-        emit EventSponsored(msg.sender, amount, event_id);        
+        emit EventSponsored(msg.sender, amount, event_id);  
+        LibStorage.EventStruct memory sposoredEvent = libStorage.events[event_id];
+        return sposoredEvent;
     }
 
 
